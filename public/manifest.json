@@ -1,7 +1,7 @@
 {
-  "name": "Kupon Mozi",
-  "short_name": "Kupon Mozi",
-  "description": "Közös film- és sorozatlista kettőnknek",
+  "name": "Hub – Kupon Mozi & Recept",
+  "short_name": "Hub",
+  "description": "Kupon Mozi és Recept & Spájz egy helyen",
   "start_url": "/",
   "display": "standalone",
   "theme_color": "#09090b",

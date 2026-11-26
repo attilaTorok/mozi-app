@@ -1,172 +1,48 @@
-import React, { useState } from 'react';
-import { Film, Ticket, RefreshCw } from 'lucide-react';
-import PinLock from './components/PinLock';
-import AddByImdb from './components/AddByImdb';
-import { FilterBar } from './components/FilterBar';
-import { TicketCard } from './components/TicketCard';
-import { RouletteModal } from './components/RouletteModal';
-import { useMovies } from './hooks/useMovies';
-import { useFilters } from './hooks/useFilters';
+import { lazy, Suspense, useCallback, useState } from 'react'
+import { ErrorProvider } from './shared/ErrorContext'
+import VaultPinLock from './shared/VaultPinLock'
+import HubLauncher from './shared/HubLauncher'
+import HubSwitcher from './shared/HubSwitcher'
+
+const MoziApp = lazy(() => import('./apps/mozi/MoziApp'))
+const RecipesApp = lazy(() => import('./apps/recipes/RecipesApp'))
+
+const APPS = ['launcher', 'mozi', 'recipes']
+const ACTIVE_APP_KEY = 'hub_active_app'
+
+function readActiveApp() {
+  const stored = sessionStorage.getItem(ACTIVE_APP_KEY)
+  return APPS.includes(stored) ? stored : 'launcher'
+}
+
+function Hub() {
+  const [isAuthenticated, setIsAuthenticated] = useState(
+    () => localStorage.getItem('app_authenticated') === 'true',
+  )
+  const [activeApp, setActiveAppState] = useState(readActiveApp)
+
+  const setActiveApp = useCallback((app) => {
+    sessionStorage.setItem(ACTIVE_APP_KEY, app)
+    setActiveAppState(app)
+  }, [])
+
+  if (!isAuthenticated) return <VaultPinLock onUnlock={() => setIsAuthenticated(true)} />
+  if (activeApp === 'launcher') return <HubLauncher onSelect={setActiveApp} />
+
+  return (
+    <>
+      <Suspense fallback={<div className="min-h-screen bg-zinc-950" />}>
+        {activeApp === 'mozi' ? <MoziApp /> : <RecipesApp />}
+      </Suspense>
+      <HubSwitcher activeApp={activeApp} onSwitch={setActiveApp} />
+    </>
+  )
+}
 
 export default function App() {
-    const [isAuthenticated, setIsAuthenticated] = useState(
-        () => localStorage.getItem('app_authenticated') === 'true'
-    );
-    const [isRouletteOpen, setIsRouletteOpen] = useState(false);
-
-    const {
-        movies,
-        loading,
-        error,
-        syncingIds,
-        bulkSyncing,
-        addMovie,
-        toggleWatched,
-        toggleSeason,
-        setRatingState,
-        updateNote,
-        deleteMovie,
-        syncSingleMovie,
-        syncAllMovies,
-    } = useMovies(isAuthenticated);
-
-    const {
-        mediaType,
-        setMediaType,
-        statusTab,
-        setStatusTab,
-        selectedGenre,
-        setSelectedGenre,
-        searchQuery,
-        setSearchQuery,
-        availableGenres,
-        filteredMovies,
-    } = useFilters(movies);
-
-    if (!isAuthenticated) {
-        return (
-            <PinLock
-                onUnlock={() => {
-                    localStorage.setItem('app_authenticated', 'true');
-                    setIsAuthenticated(true);
-                }}
-            />
-        );
-    }
-
-    return (
-        <div className="min-h-screen bg-zinc-950 text-amber-100 font-mono pb-16">
-            <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
-                {/* FEJLÉC */}
-                <header className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-zinc-800 pb-5">
-                    <div className="flex items-center gap-3">
-                        <Film className="w-7 h-7 text-amber-400" />
-                        <h1 className="text-2xl sm:text-3xl font-black tracking-widest text-amber-400">
-                            KUPON MOZI
-                        </h1>
-                    </div>
-
-                    <div className="flex flex-wrap items-center gap-2.5">
-                        {/* Tömeges frissítés angolra és évadok lekérése */}
-                        <button
-                            onClick={syncAllMovies}
-                            disabled={bulkSyncing}
-                            title="Minden mentett film/sorozat frissítése angolra és legújabb évadokra"
-                            className="px-3.5 py-2.5 bg-zinc-900 hover:bg-zinc-800 text-amber-300 border border-amber-500/40 text-xs font-bold uppercase tracking-wider flex items-center gap-2 transition disabled:opacity-50"
-                        >
-                            <RefreshCw
-                                className={`w-4 h-4 ${bulkSyncing ? 'animate-spin' : ''}`}
-                            />
-                            {bulkSyncing ? 'FRISSÍTÉS...' : 'TMDB SYNC (ALL)'}
-                        </button>
-
-                        <button
-                            onClick={() => setIsRouletteOpen(true)}
-                            className="px-5 py-2.5 bg-amber-400 hover:bg-amber-300 text-black font-black text-xs uppercase tracking-wider shadow-[4px_4px_0px_0px_#78350f] active:translate-x-1 active:translate-y-1 transition flex items-center gap-2"
-                        >
-                            <Ticket className="w-4 h-4" />
-                            JEGYHÚZÁS / SORSOLÁS
-                        </button>
-                    </div>
-                </header>
-
-                {/* HOZZÁADÁS IMDb LINKKEL */}
-                <AddByImdb onAddMovie={addMovie} />
-
-                {/* SZŰRŐK */}
-                <FilterBar
-                    movies={movies}
-                    mediaType={mediaType}
-                    setMediaType={setMediaType}
-                    statusTab={statusTab}
-                    setStatusTab={setStatusTab}
-                    selectedGenre={selectedGenre}
-                    setSelectedGenre={setSelectedGenre}
-                    searchQuery={searchQuery}
-                    setSearchQuery={setSearchQuery}
-                    availableGenres={availableGenres}
-                />
-
-                {/* HIBA / BETÖLTÉS */}
-                {error && (
-                    <div className="bg-red-950/60 border border-red-800 text-red-300 p-4 text-xs">
-                        Hiba történt: {error}
-                    </div>
-                )}
-
-                {loading ? (
-                    <div className="text-center py-16 text-xs text-amber-400 animate-pulse">
-                        ADATBÁZIS BETÖLTÉSE...
-                    </div>
-                ) : filteredMovies.length === 0 ? (
-                    <div className="border border-dashed border-zinc-800 p-12 text-center text-xs text-zinc-500">
-                        Nincs találat ezen a fülön. Adj hozzá egy filmet az IMDb linkjével!
-                    </div>
-                ) : (
-                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-                        {filteredMovies.map((movie, index) => (
-                            <TicketCard
-                                key={movie.id}
-                                movie={movie}
-                                index={index}
-                                isSyncing={syncingIds.includes(movie.id)}
-                                onToggleWatched={toggleWatched}
-                                onToggleSeason={toggleSeason}
-                                onSetRatingState={setRatingState}
-                                onUpdateNote={updateNote}
-                                onSyncSingle={syncSingleMovie}
-                                onDelete={deleteMovie}
-                            />
-                        ))}
-                    </div>
-                )}
-            </div>
-
-            {/* GLOBÁLIS HIBA ÉRTESÍTÉS (TOAST) */}
-            {error && (
-                <div className="fixed bottom-4 right-4 left-4 sm:left-auto sm:max-w-md z-50 bg-red-950 border-2 border-red-500 text-red-200 p-4 shadow-[4px_4px_0px_0px_#000] flex items-start justify-between gap-3 text-xs">
-                    <div>
-                        <div className="font-black text-red-400 uppercase mb-0.5">
-                            RENDSZERHIBA
-                        </div>
-                        <div>{error}</div>
-                    </div>
-                    <button
-                        onClick={clearError}
-                        className="text-red-400 hover:text-white font-bold px-1.5"
-                    >
-                        ✕
-                    </button>
-                </div>
-            )}
-
-            {/* SORSOLÓ MODÁL */}
-            <RouletteModal
-                isOpen={isRouletteOpen}
-                onClose={() => setIsRouletteOpen(false)}
-                movies={movies}
-                onAddMovie={addMovie}
-            />
-        </div>
-    );
+  return (
+    <ErrorProvider>
+      <Hub />
+    </ErrorProvider>
+  )
 }
