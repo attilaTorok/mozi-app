@@ -1,93 +1,245 @@
-import { useCallback, useEffect, useState } from 'react'
-import { supabase } from '../lib/supabase.js'
+import { useState, useEffect, useCallback } from 'react';
+import { supabase } from '../lib/supabase';
+import { fetchMediaDetailsByTmdb } from '../lib/tmdb';
 
-/** Betölti a teljes `movies` táblát, valós időben szinkronizál, és CRUD műveleteket ad. */
-export function useMovies(enabled) {
-  const [movies, setMovies] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState(null)
+export function useMovies(isAuthenticated) {
+    const [movies, setMovies] = useState([]);
+    const [loading, setLoading] = useState(true);
+    const [syncingIds, setSyncingIds] = useState([]);
+    const [bulkSyncing, setBulkSyncing] = useState(false);
+    const [error, setError] = useState(null);
 
-  useEffect(() => {
-    if (!enabled) return
-    let active = true
+    const fetchMovies = useCallback(async () => {
+        if (!isAuthenticated) return;
+        try {
+            setLoading(true);
+            const { data, error: sbError } = await supabase
+                .from('movies')
+                .select('*')
+                .order('created_at', { ascending: false });
 
-    ;(async () => {
-      const { data, error } = await supabase
-        .from('movies')
-        .select('*')
-        .order('created_at', { ascending: false })
-      if (!active) return
-      if (error) setError('Nem sikerült betölteni a listát: ' + error.message)
-      else setMovies(data)
-      setLoading(false)
-    })()
+            if (sbError) throw sbError;
+            setMovies(data || []);
+        } catch (err) {
+            setError(err.message);
+        } finally {
+            setLoading(false);
+        }
+    }, [isAuthenticated]);
 
-    const channel = supabase
-      .channel('movies-changes')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'movies' }, (payload) => {
-        setMovies((prev) => {
-          if (payload.eventType === 'INSERT') {
-            return prev.some((m) => m.id === payload.new.id) ? prev : [payload.new, ...prev]
-          }
-          if (payload.eventType === 'UPDATE') {
-            return prev.map((m) => (m.id === payload.new.id ? payload.new : m))
-          }
-          if (payload.eventType === 'DELETE') {
-            return prev.filter((m) => m.id !== payload.old.id)
-          }
-          return prev
-        })
-      })
-      .subscribe()
+    useEffect(() => {
+        fetchMovies();
 
-    return () => {
-      active = false
-      supabase.removeChannel(channel)
-    }
-  }, [enabled])
+        if (!isAuthenticated) return;
+        const channel = supabase
+            .channel('movies-realtime')
+            .on(
+                'postgres_changes',
+                { event: '*', schema: 'public', table: 'movies' },
+                () => {
+                    fetchMovies();
+                }
+            )
+            .subscribe();
 
-  const addMovie = useCallback(async (row) => {
-    const { data, error } = await supabase.from('movies').insert(row).select().single()
-    if (error) {
-      if (error.code === '23505') throw new Error('Ez már szerepel a gyűjteményben.')
-      throw new Error('Mentési hiba: ' + error.message)
-    }
-    setMovies((prev) => (prev.some((m) => m.id === data.id) ? prev : [data, ...prev]))
-    return data
-  }, [])
+        return () => {
+            supabase.removeChannel(channel);
+        };
+    }, [isAuthenticated, fetchMovies]);
 
-  const updateMovie = useCallback(async (id, patch) => {
-    let previous
-    setMovies((prev) =>
-      prev.map((m) => {
-        if (m.id === id) previous = m
-        return m.id === id ? { ...m, ...patch } : m
-      }),
-    )
-    const { error } = await supabase.from('movies').update(patch).eq('id', id)
-    if (error) {
-      setMovies((prev) => prev.map((m) => (m.id === id && previous ? previous : m)))
-      throw new Error('Frissítési hiba: ' + error.message)
-    }
-  }, [])
+    const addMovie = async (movieData) => {
+        const exists = movies.some((m) => m.imdb_id === movieData.imdb_id);
+        if (exists) {
+            throw new Error('Ez a tétel már szerepel a gyűjteményben!');
+        }
 
-  const toggleWatched = useCallback(
-    (movie) =>
-      updateMovie(movie.id, movie.watched ? { watched: false, liked: null } : { watched: true }),
-    [updateMovie],
-  )
+        const payload = {
+            ...movieData,
+            watched: false,
+            rating_state: null,
+            watched_seasons: [],
+            note: '',
+        };
 
-  const rate = useCallback(
-    (movie, value) => updateMovie(movie.id, { liked: movie.liked === value ? null : value }),
-    [updateMovie],
-  )
+        const { data, error: sbError } = await supabase
+            .from('movies')
+            .insert([payload])
+            .select()
+            .single();
 
-  const removeMovie = useCallback(async (id) => {
-    const { error } = await supabase.from('movies').delete().eq('id', id)
-    if (error) throw new Error('Törlési hiba: ' + error.message)
-    setMovies((prev) => prev.filter((m) => m.id !== id))
-  }, [])
+        if (sbError) throw sbError;
+        setMovies((prev) => [data, ...prev]);
+        return data;
+    };
 
-  return { movies, loading, error, addMovie, toggleWatched, rate, removeMovie }
+    const toggleWatched = async (movie) => {
+        const nextWatched = !movie.watched;
+        let nextSeasons = movie.watched_seasons || [];
+
+        // Ha sorozatot pipálunk be megnézettként, minden megjelent évadot bepipálunk
+        if (movie.media_type === 'tv') {
+            if (nextWatched) {
+                const count = movie.released_seasons || 1;
+                nextSeasons = Array.from({ length: count }, (_, i) => i + 1);
+            } else {
+                nextSeasons = [];
+            }
+        }
+
+        const updates = {
+            watched: nextWatched,
+            watched_seasons: nextSeasons,
+            rating_state: nextWatched ? movie.rating_state : null,
+        };
+
+        const { error: sbError } = await supabase
+            .from('movies')
+            .update(updates)
+            .eq('id', movie.id);
+
+        if (sbError) throw sbError;
+        setMovies((prev) =>
+            prev.map((m) => (m.id === movie.id ? { ...m, ...updates } : m))
+        );
+    };
+
+    const toggleSeason = async (movie, seasonNum) => {
+        const current = movie.watched_seasons || [];
+        const exists = current.includes(seasonNum);
+        const nextSeasons = exists
+            ? current.filter((s) => s !== seasonNum)
+            : [...current, seasonNum].sort((a, b) => a - b);
+
+        const releasedCount = movie.released_seasons || 1;
+        // Akkor számít "megnézettnek", ha az összes már megjelent évadot láttuk
+        const allReleasedWatched =
+            releasedCount > 0 && nextSeasons.length >= releasedCount;
+
+        const updates = {
+            watched_seasons: nextSeasons,
+            watched: allReleasedWatched,
+        };
+
+        const { error: sbError } = await supabase
+            .from('movies')
+            .update(updates)
+            .eq('id', movie.id);
+
+        if (sbError) throw sbError;
+        setMovies((prev) =>
+            prev.map((m) => (m.id === movie.id ? { ...m, ...updates } : m))
+        );
+    };
+
+    const setRatingState = async (movie, newState) => {
+        const finalState = movie.rating_state === newState ? null : newState;
+        const { error: sbError } = await supabase
+            .from('movies')
+            .update({ rating_state: finalState })
+            .eq('id', movie.id);
+
+        if (sbError) throw sbError;
+        setMovies((prev) =>
+            prev.map((m) =>
+                m.id === movie.id ? { ...m, rating_state: finalState } : m
+            )
+        );
+    };
+
+    const updateNote = async (movieId, noteText) => {
+        const { error: sbError } = await supabase
+            .from('movies')
+            .update({ note: noteText })
+            .eq('id', movieId);
+
+        if (sbError) throw sbError;
+        setMovies((prev) =>
+            prev.map((m) => (m.id === movieId ? { ...m, note: noteText } : m))
+        );
+    };
+
+    const deleteMovie = async (movieId) => {
+        const { error: sbError } = await supabase
+            .from('movies')
+            .delete()
+            .eq('id', movieId);
+
+        if (sbError) throw sbError;
+        setMovies((prev) => prev.filter((m) => m.id !== movieId));
+    };
+
+    // Egyetlen tétel frissítése TMDB-ből (angol nyelv + új évadok)
+    const syncSingleMovie = async (movie) => {
+        setSyncingIds((prev) => [...prev, movie.id]);
+        try {
+            const fresh = await fetchMediaDetailsByTmdb(
+                movie.tmdb_id,
+                movie.media_type
+            );
+
+            const watchedSeasons = movie.watched_seasons || [];
+            // Ha kijött egy új évad, amit még nem láttak, automatikusan visszakerül a megnézendők közé
+            const stillAllWatched =
+                movie.media_type === 'tv'
+                    ? fresh.released_seasons > 0 &&
+                    watchedSeasons.length >= fresh.released_seasons
+                    : movie.watched;
+
+            const updates = {
+                title: fresh.title,
+                overview: fresh.overview,
+                genres: fresh.genres,
+                poster_path: fresh.poster_path,
+                vote_average: fresh.vote_average,
+                trailer_url: fresh.trailer_url,
+                release_year: fresh.release_year,
+                total_seasons: fresh.total_seasons,
+                released_seasons: fresh.released_seasons,
+                series_status: fresh.series_status,
+                next_air_date: fresh.next_air_date,
+                watched: stillAllWatched,
+            };
+
+            const { error: sbError } = await supabase
+                .from('movies')
+                .update(updates)
+                .eq('id', movie.id);
+
+            if (sbError) throw sbError;
+            setMovies((prev) =>
+                prev.map((m) => (m.id === movie.id ? { ...m, ...updates } : m))
+            );
+        } finally {
+            setSyncingIds((prev) => prev.filter((id) => id !== movie.id));
+        }
+    };
+
+    // Összes tétel frissítése angolra + legfrissebb évadadatok lekérése
+    const syncAllMovies = async () => {
+        if (bulkSyncing || movies.length === 0) return;
+        setBulkSyncing(true);
+        try {
+            for (const m of movies) {
+                await syncSingleMovie(m);
+            }
+        } finally {
+            setBulkSyncing(false);
+        }
+    };
+
+    return {
+        movies,
+        loading,
+        error,
+        syncingIds,
+        bulkSyncing,
+        addMovie,
+        toggleWatched,
+        toggleSeason,
+        setRatingState,
+        updateNote,
+        deleteMovie,
+        syncSingleMovie,
+        syncAllMovies,
+    };
 }
-

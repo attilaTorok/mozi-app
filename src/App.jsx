@@ -1,114 +1,154 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { Dices, Film } from 'lucide-react'
-import clsx from 'clsx'
-import PinLock from './components/PinLock.jsx'
-import AddByImdb from './components/AddByImdb.jsx'
-import FilterBar from './components/FilterBar.jsx'
-import TicketCard from './components/TicketCard.jsx'
-import RouletteModal from './components/RouletteModal.jsx'
-import ArcadeButton from './components/ArcadeButton.jsx'
-import { useMovies } from './hooks/useMovies.js'
-import { useFilters } from './hooks/useFilters.js'
-import { isSupabaseConfigured, isTmdbConfigured } from './lib/config.js'
+import React, { useState } from 'react';
+import { Film, Ticket, RefreshCw } from 'lucide-react';
+import { PinLock } from './components/PinLock';
+import { AddByImdb } from './components/AddByImdb';
+import { FilterBar } from './components/FilterBar';
+import { TicketCard } from './components/TicketCard';
+import { RouletteModal } from './components/RouletteModal';
+import { useMovies } from './hooks/useMovies';
+import { useFilters } from './hooks/useFilters';
 
 export default function App() {
-  const [authed, setAuthed] = useState(() => localStorage.getItem('app_authenticated') === 'true')
-  if (!authed) return <PinLock onUnlock={() => setAuthed(true)} />
-  return <Main />
-}
+    const [isAuthenticated, setIsAuthenticated] = useState(
+        () => localStorage.getItem('app_authenticated') === 'true'
+    );
+    const [isRouletteOpen, setIsRouletteOpen] = useState(false);
 
-function Main() {
-  const { movies, loading, error, addMovie, toggleWatched, rate, removeMovie } = useMovies(true)
-  const filters = useFilters(movies)
-  const [showRoulette, setShowRoulette] = useState(false)
-  const [toast, setToast] = useState(null)
-  const timer = useRef()
+    const {
+        movies,
+        loading,
+        error,
+        syncingIds,
+        bulkSyncing,
+        addMovie,
+        toggleWatched,
+        toggleSeason,
+        setRatingState,
+        updateNote,
+        deleteMovie,
+        syncSingleMovie,
+        syncAllMovies,
+    } = useMovies(isAuthenticated);
 
-  const notify = useCallback((text, kind = 'info') => {
-    setToast({ text, kind })
-    clearTimeout(timer.current)
-    timer.current = setTimeout(() => setToast(null), 3500)
-  }, [])
-  useEffect(() => () => clearTimeout(timer.current), [])
+    const {
+        mediaType,
+        setMediaType,
+        statusTab,
+        setStatusTab,
+        selectedGenre,
+        setSelectedGenre,
+        searchQuery,
+        setSearchQuery,
+        availableGenres,
+        filteredMovies,
+    } = useFilters(movies);
 
-  const safe = (fn) => async (...args) => {
-    try {
-      await fn(...args)
-    } catch (e) {
-      notify(e.message, 'error')
+    if (!isAuthenticated) {
+        return (
+            <PinLock
+                onUnlock={() => {
+                    localStorage.setItem('app_authenticated', 'true');
+                    setIsAuthenticated(true);
+                }}
+            />
+        );
     }
-  }
 
-  return (
-    <div className="min-h-screen font-mono">
-      <div className="mx-auto max-w-7xl px-3 sm:px-6 py-5 space-y-5">
-        <header className="flex flex-wrap items-center justify-between gap-3">
-          <h1 className="text-2xl font-bold text-amber-400 inline-flex items-center gap-2 tracking-widest">
-            <Film /> KUPON MOZI
-          </h1>
-          <ArcadeButton variant="primary" onClick={() => setShowRoulette(true)}>
-            <Dices size={16} /> Jegyhúzás / Sorsolás
-          </ArcadeButton>
-        </header>
+    return (
+        <div className="min-h-screen bg-zinc-950 text-amber-100 font-mono pb-16">
+            <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
+                {/* FEJLÉC */}
+                <header className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-zinc-800 pb-5">
+                    <div className="flex items-center gap-3">
+                        <Film className="w-7 h-7 text-amber-400" />
+                        <h1 className="text-2xl sm:text-3xl font-black tracking-widest text-amber-400">
+                            KUPON MOZI
+                        </h1>
+                    </div>
 
-        {(!isSupabaseConfigured || !isTmdbConfigured) && (
-          <div className="border border-yellow-500/50 bg-yellow-500/10 text-yellow-200 text-xs p-3">
-            Hiányzó beállítás: töltsd ki a .env.local fájlban a Supabase és TMDB értékeket, majd indítsd újra a fejlesztői szervert.
-          </div>
-        )}
+                    <div className="flex flex-wrap items-center gap-2.5">
+                        {/* Tömeges frissítés angolra és évadok lekérése */}
+                        <button
+                            onClick={syncAllMovies}
+                            disabled={bulkSyncing}
+                            title="Minden mentett film/sorozat frissítése angolra és legújabb évadokra"
+                            className="px-3.5 py-2.5 bg-zinc-900 hover:bg-zinc-800 text-amber-300 border border-amber-500/40 text-xs font-bold uppercase tracking-wider flex items-center gap-2 transition disabled:opacity-50"
+                        >
+                            <RefreshCw
+                                className={`w-4 h-4 ${bulkSyncing ? 'animate-spin' : ''}`}
+                            />
+                            {bulkSyncing ? 'FRISSÍTÉS...' : 'TMDB SYNC (ALL)'}
+                        </button>
 
-        <AddByImdb onAdd={addMovie} notify={notify} />
-        <FilterBar filters={filters} />
+                        <button
+                            onClick={() => setIsRouletteOpen(true)}
+                            className="px-5 py-2.5 bg-amber-400 hover:bg-amber-300 text-black font-black text-xs uppercase tracking-wider shadow-[4px_4px_0px_0px_#78350f] active:translate-x-1 active:translate-y-1 transition flex items-center gap-2"
+                        >
+                            <Ticket className="w-4 h-4" />
+                            JEGYHÚZÁS / SORSOLÁS
+                        </button>
+                    </div>
+                </header>
 
-        {error && <p className="text-red-400 text-sm">{error}</p>}
+                {/* HOZZÁADÁS IMDb LINKKEL */}
+                <AddByImdb onAddMovie={addMovie} />
 
-        {loading ? (
-          <p className="text-zinc-500 text-sm">Jegyek betöltése…</p>
-        ) : filters.filtered.length === 0 ? (
-          <p className="text-zinc-500 text-sm border border-dashed border-zinc-700 p-6 text-center">
-            Nincs találat. Adj hozzá egy filmet az IMDb linkjével!
-          </p>
-        ) : (
-          <div className="grid gap-4 grid-cols-1 md:grid-cols-2 2xl:grid-cols-3">
-            {filters.filtered.map((m) => (
-              <TicketCard
-                key={m.id}
-                movie={m}
-                onToggleWatched={safe(toggleWatched)}
-                onRate={safe(rate)}
-                onDelete={safe(async (movie) => {
-                  await removeMovie(movie.id)
-                  notify('Jegy törölve.', 'success')
-                })}
-              />
-            ))}
-          </div>
-        )}
-      </div>
+                {/* SZŰRŐK */}
+                <FilterBar
+                    movies={movies}
+                    mediaType={mediaType}
+                    setMediaType={setMediaType}
+                    statusTab={statusTab}
+                    setStatusTab={setStatusTab}
+                    selectedGenre={selectedGenre}
+                    setSelectedGenre={setSelectedGenre}
+                    searchQuery={searchQuery}
+                    setSearchQuery={setSearchQuery}
+                    availableGenres={availableGenres}
+                />
 
-      {showRoulette && (
-        <RouletteModal
-          movies={movies}
-          onAdd={addMovie}
-          notify={notify}
-          onClose={() => setShowRoulette(false)}
-        />
-      )}
+                {/* HIBA / BETÖLTÉS */}
+                {error && (
+                    <div className="bg-red-950/60 border border-red-800 text-red-300 p-4 text-xs">
+                        Hiba történt: {error}
+                    </div>
+                )}
 
-      {toast && (
-        <div
-          role="status"
-          className={clsx(
-            'fixed bottom-4 left-1/2 -translate-x-1/2 z-[60] max-w-[90vw] px-4 py-2 border-2 text-sm font-bold shadow-[4px_4px_0px_0px_#000]',
-            toast.kind === 'error' && 'bg-red-600 border-red-300 text-white',
-            toast.kind === 'success' && 'bg-green-500 border-green-200 text-black',
-            toast.kind === 'info' && 'bg-amber-500 border-amber-200 text-black',
-          )}
-        >
-          {toast.text}
+                {loading ? (
+                    <div className="text-center py-16 text-xs text-amber-400 animate-pulse">
+                        ADATBÁZIS BETÖLTÉSE...
+                    </div>
+                ) : filteredMovies.length === 0 ? (
+                    <div className="border border-dashed border-zinc-800 p-12 text-center text-xs text-zinc-500">
+                        Nincs találat ezen a fülön. Adj hozzá egy filmet az IMDb linkjével!
+                    </div>
+                ) : (
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+                        {filteredMovies.map((movie, index) => (
+                            <TicketCard
+                                key={movie.id}
+                                movie={movie}
+                                index={index}
+                                isSyncing={syncingIds.includes(movie.id)}
+                                onToggleWatched={toggleWatched}
+                                onToggleSeason={toggleSeason}
+                                onSetRatingState={setRatingState}
+                                onUpdateNote={updateNote}
+                                onSyncSingle={syncSingleMovie}
+                                onDelete={deleteMovie}
+                            />
+                        ))}
+                    </div>
+                )}
+            </div>
+
+            {/* SORSOLÓ MODÁL */}
+            <RouletteModal
+                isOpen={isRouletteOpen}
+                onClose={() => setIsRouletteOpen(false)}
+                movies={movies}
+                onAddMovie={addMovie}
+            />
         </div>
-      )}
-    </div>
-  )
+    );
 }
-

@@ -1,196 +1,319 @@
-import { useCallback, useEffect, useState } from 'react'
-import { Dices, Loader2, Plus, Play, X } from 'lucide-react'
-import clsx from 'clsx'
-import confetti from 'canvas-confetti'
-import ArcadeButton from './ArcadeButton.jsx'
-import TicketCard from './TicketCard.jsx'
-import { discover, fetchDetails, fetchGenreMap } from '../lib/tmdb.js'
+import React, { useState } from 'react';
+import { X, RotateCw, Play, Plus, Sparkles, Ticket } from 'lucide-react';
+import { discoverRandomMedia, discoverBasedOnLiked } from '../lib/tmdb';
+import { isWatchlistItem } from '../hooks/useFilters';
 
-const pickRandom = (arr, n) => [...arr].sort(() => Math.random() - 0.5).slice(0, n)
+export function RouletteModal({ isOpen, onClose, movies, onAddMovie }) {
+    const [mode, setMode] = useState('local'); // 'local' | 'discover' | 'liked'
+    const [mediaFilter, setMediaFilter] = useState('all'); // 'all' | 'movie' | 'tv'
+    const [selectedGenre, setSelectedGenre] = useState('all');
+    const [picks, setPicks] = useState([]);
+    const [seedTitle, setSeedTitle] = useState(null);
+    const [expandedIds, setExpandedIds] = useState({});
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState('');
+    const [addedIds, setAddedIds] = useState([]);
 
-/** "Mit nézzünk ma?" – jegyhúzás saját listából vagy TMDB felfedezés. */
-export default function RouletteModal({ movies, onClose, onAdd, notify }) {
-  const [mode, setMode] = useState('own') // own | explore
-  const [type, setType] = useState('all') // own: all|movie|tv ; explore: movie|tv
-  const [genre, setGenre] = useState(null)
-  const [picks, setPicks] = useState([])
-  const [loading, setLoading] = useState(false)
-  const [addingId, setAddingId] = useState(null)
+    if (!isOpen) return null;
 
-  const unwatched = movies.filter((m) => !m.watched)
-  const ownPool = unwatched.filter(
-    (m) => (type === 'all' || m.media_type === type) && (!genre || (m.genres || []).includes(genre)),
-  )
-  const genres = [
-    ...new Set(
-      unwatched.filter((m) => type === 'all' || m.media_type === type).flatMap((m) => m.genres || []),
-    ),
-  ].sort((a, b) => a.localeCompare(b, 'hu'))
+    const unwatched = movies.filter(isWatchlistItem);
+    const likedItems = movies.filter((m) => m.rating_state === 'liked');
 
-  const spin = useCallback(async () => {
-    if (mode === 'own') {
-      setPicks(pickRandom(ownPool, 3))
-      confetti({ particleCount: 50, spread: 60, origin: { y: 0.4 } })
-      return
-    }
-    setLoading(true)
-    try {
-      const t = type === 'tv' ? 'tv' : 'movie'
-      const [items, gmap] = await Promise.all([discover(t), fetchGenreMap(t)])
-      const known = new Set(movies.filter((m) => m.media_type === t).map((m) => m.tmdb_id))
-      const fresh = items.filter((i) => !known.has(i.id) && i.poster_path)
-      setPicks(
-        pickRandom(fresh, 3).map((i) => ({
-          id: `d-${i.id}`,
-          tmdb_id: i.id,
-          media_type: t,
-          title: i.title || i.name,
-          poster_path: i.poster_path,
-          overview: i.overview,
-          vote_average: i.vote_average,
-          release_year: parseInt((i.release_date || i.first_air_date || '0').slice(0, 4), 10) || null,
-          genres: (i.genre_ids || []).map((g) => gmap[g]).filter(Boolean),
-        })),
-      )
-      confetti({ particleCount: 50, spread: 60, origin: { y: 0.4 } })
-    } catch (err) {
-      notify(err.message, 'error')
-    } finally {
-      setLoading(false)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, type, genre, movies])
+    const genres = Array.from(
+        new Set(unwatched.flatMap((m) => m.genres || []))
+    ).sort();
 
-  // Mód/szűrő váltáskor töröljük az eredményt
-  useEffect(() => setPicks([]), [mode, type, genre])
+    const handleSpin = async () => {
+        setError('');
+        setExpandedIds({});
+        setSeedTitle(null);
 
-  const addDiscovered = async (item) => {
-    setAddingId(item.id)
-    try {
-      const row = await fetchDetails(item.media_type, item.tmdb_id)
-      await onAdd(row)
-      notify(`„${row.title}” hozzáadva a gyűjteményhez!`, 'success')
-      setPicks((p) => p.filter((x) => x.id !== item.id))
-    } catch (err) {
-      notify(err.message, 'error')
-    } finally {
-      setAddingId(null)
-    }
-  }
-
-  const switchMode = (m) => {
-    setMode(m)
-    setGenre(null)
-    if (m === 'explore' && type === 'all') setType('movie')
-  }
-
-  const typeOptions =
-    mode === 'own'
-      ? [['all', 'Mind'], ['movie', 'Film'], ['tv', 'Sorozat']]
-      : [['movie', 'Film'], ['tv', 'Sorozat']]
-
-  return (
-    <div className="fixed inset-0 z-50 bg-black/80 overflow-y-auto p-3" onClick={onClose}>
-      <div
-        className="relative mx-auto my-4 max-w-6xl border border-amber-500/40 bg-zinc-950 p-4 shadow-[4px_4px_0px_0px_#78350f] font-mono"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-bold text-amber-400 inline-flex items-center gap-2">
-            <Dices size={20} /> MIT NÉZZÜNK MA?
-          </h2>
-          <button onClick={onClose} aria-label="Bezárás" className="p-2 text-zinc-400 hover:text-amber-300">
-            <X size={20} />
-          </button>
-        </div>
-
-        <div className="flex flex-wrap gap-2 mb-3">
-          <ArcadeButton variant={mode === 'own' ? 'active' : 'dark'} onClick={() => switchMode('own')}>
-            Saját gyűjteményből
-          </ArcadeButton>
-          <ArcadeButton variant={mode === 'explore' ? 'active' : 'dark'} onClick={() => switchMode('explore')}>
-            Nyitott felfedezés
-          </ArcadeButton>
-        </div>
-
-        <div className="flex flex-wrap gap-2 mb-2">
-          {typeOptions.map(([v, l]) => (
-            <button
-              key={v}
-              onClick={() => setType(v)}
-              className={clsx(
-                'text-[11px] px-2.5 py-1 border',
-                type === v ? 'bg-amber-400 text-black border-amber-200' : 'bg-zinc-800 text-amber-200 border-zinc-700',
-              )}
-            >
-              {l}
-            </button>
-          ))}
-        </div>
-
-        {mode === 'own' && genres.length > 0 && (
-          <div className="flex flex-wrap gap-1.5 mb-3">
-            {[null, ...genres].map((g) => (
-              <button
-                key={g ?? 'all'}
-                onClick={() => setGenre(g)}
-                className={clsx(
-                  'text-[10px] px-2 py-0.5 border',
-                  genre === g ? 'bg-amber-400 text-black border-amber-200' : 'bg-zinc-800 text-amber-200/90 border-zinc-700',
-                )}
-              >
-                {g ?? 'Minden műfaj'}
-              </button>
-            ))}
-          </div>
-        )}
-
-        <ArcadeButton variant="primary" onClick={spin} disabled={loading || (mode === 'own' && ownPool.length === 0)}>
-          {loading ? <Loader2 size={16} className="animate-spin" /> : <Dices size={16} />}
-          {picks.length ? 'Újrapörgetés' : 'Jegyhúzás'}
-        </ArcadeButton>
-
-        {mode === 'own' && ownPool.length === 0 && (
-          <p className="mt-3 text-xs text-zinc-500">Nincs megnézetlen tétel ezzel a szűréssel.</p>
-        )}
-
-        {picks.length > 0 && (
-          <div className="mt-5 grid gap-4 lg:grid-cols-3">
-            {picks.map((m) => (
-              <TicketCard
-                key={m.id}
-                movie={m}
-                footer={
-                  <>
-                    {m.trailer_url && (
-                      <a
-                        href={m.trailer_url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="inline-flex items-center gap-1 min-h-[40px] px-2 border-2 border-zinc-600 bg-zinc-800 text-amber-200 text-[10px] font-bold shadow-[3px_3px_0px_0px_#000]"
-                      >
-                        <Play size={14} /> ELŐZETES
-                      </a>
-                    )}
-                    {mode === 'explore' && (
-                      <ArcadeButton
-                        variant="primary"
-                        className="text-[10px]"
-                        disabled={addingId === m.id}
-                        onClick={() => addDiscovered(m)}
-                      >
-                        {addingId === m.id ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
-                        Hozzáadás a gyűjteményhez
-                      </ArcadeButton>
-                    )}
-                  </>
+        if (mode === 'local') {
+            const pool = unwatched.filter((m) => {
+                if (mediaFilter !== 'all' && m.media_type !== mediaFilter) return false;
+                if (
+                    selectedGenre !== 'all' &&
+                    !(m.genres || []).includes(selectedGenre)
+                ) {
+                    return false;
                 }
-              />
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
+                return true;
+            });
 
+            const shuffled = [...pool].sort(() => 0.5 - Math.random()).slice(0, 3);
+            setPicks(shuffled);
+            if (shuffled.length === 0) {
+                setError('Nincs a szűrésnek megfelelő megnézendő tétel a listádon.');
+            }
+            return;
+        }
+
+        setLoading(true);
+        try {
+            const existingTmdbIds = movies.map((m) => m.tmdb_id);
+            if (mode === 'discover') {
+                const targetType = mediaFilter === 'tv' ? 'tv' : 'movie';
+                const results = await discoverRandomMedia(targetType, existingTmdbIds);
+                setPicks(results);
+            } else if (mode === 'liked') {
+                const res = await discoverBasedOnLiked(likedItems, existingTmdbIds);
+                setSeedTitle(res.seedTitle);
+                setPicks(res.items);
+            }
+        } catch (err) {
+            setError(err.message);
+            setPicks([]);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleQuickAdd = async (item) => {
+        try {
+            await onAddMovie(item);
+            setAddedIds((prev) => [...prev, item.tmdb_id]);
+        } catch (err) {
+            setError(err.message);
+        }
+    };
+
+    const toggleExpand = (key) => {
+        setExpandedIds((prev) => ({ ...prev, [key]: !prev[key] }));
+    };
+
+    return (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
+            <div className="w-full max-w-5xl bg-zinc-950 border-2 border-amber-500/50 p-6 shadow-[8px_8px_0px_0px_#78350f] relative my-auto">
+                <button
+                    onClick={onClose}
+                    className="absolute top-4 right-4 text-zinc-400 hover:text-amber-300"
+                >
+                    <X className="w-6 h-6" />
+                </button>
+
+                {/* Fejléc */}
+                <div className="flex items-center gap-2 text-amber-400 mb-4">
+                    <Ticket className="w-6 h-6" />
+                    <h2 className="text-xl sm:text-2xl font-black tracking-wider uppercase">
+                        MIT NÉZZÜNK MA?
+                    </h2>
+                </div>
+
+                {/* Módválasztó fülek */}
+                <div className="flex flex-wrap gap-2 mb-4">
+                    <button
+                        onClick={() => setMode('local')}
+                        className={`px-4 py-2 text-xs font-bold uppercase border transition ${
+                            mode === 'local'
+                                ? 'bg-amber-400 text-black border-amber-400 shadow-[3px_3px_0px_0px_#000]'
+                                : 'bg-zinc-900 text-zinc-300 border-zinc-700 hover:border-amber-500/50'
+                        }`}
+                    >
+                        Saját gyűjteményből
+                    </button>
+
+                    <button
+                        onClick={() => setMode('liked')}
+                        className={`px-4 py-2 text-xs font-bold uppercase border transition flex items-center gap-1.5 ${
+                            mode === 'liked'
+                                ? 'bg-amber-400 text-black border-amber-400 shadow-[3px_3px_0px_0px_#000]'
+                                : 'bg-zinc-900 text-zinc-300 border-zinc-700 hover:border-amber-500/50'
+                        }`}
+                    >
+                        <Sparkles className="w-3.5 h-3.5" />
+                        Kedvencek alapján ({likedItems.length})
+                    </button>
+
+                    <button
+                        onClick={() => setMode('discover')}
+                        className={`px-4 py-2 text-xs font-bold uppercase border transition ${
+                            mode === 'discover'
+                                ? 'bg-amber-400 text-black border-amber-400 shadow-[3px_3px_0px_0px_#000]'
+                                : 'bg-zinc-900 text-zinc-300 border-zinc-700 hover:border-amber-500/50'
+                        }`}
+                    >
+                        Nyitott felfedezés
+                    </button>
+                </div>
+
+                {/* Szűrők (csak helyi és nyitott módban) */}
+                {mode !== 'liked' && (
+                    <div className="space-y-3 mb-4">
+                        <div className="flex gap-1.5">
+                            {[
+                                { id: 'all', label: 'Mind', disabled: mode === 'discover' },
+                                { id: 'movie', label: 'Film', disabled: false },
+                                { id: 'tv', label: 'Sorozat', disabled: false },
+                            ]
+                                .filter((x) => !x.disabled)
+                                .map((t) => (
+                                    <button
+                                        key={t.id}
+                                        onClick={() => setMediaFilter(t.id)}
+                                        className={`px-3 py-1.5 text-xs font-bold border ${
+                                            mediaFilter === t.id
+                                                ? 'bg-amber-400 text-black border-amber-400'
+                                                : 'bg-zinc-900 text-zinc-400 border-zinc-800'
+                                        }`}
+                                    >
+                                        {t.label}
+                                    </button>
+                                ))}
+                        </div>
+
+                        {mode === 'local' && genres.length > 0 && (
+                            <div className="flex flex-wrap gap-1.5">
+                                <button
+                                    onClick={() => setSelectedGenre('all')}
+                                    className={`text-[10px] px-2.5 py-1 border font-bold ${
+                                        selectedGenre === 'all'
+                                            ? 'bg-amber-400 text-black border-amber-400'
+                                            : 'bg-zinc-900 text-zinc-400 border-zinc-800'
+                                    }`}
+                                >
+                                    Minden műfaj
+                                </button>
+                                {genres.map((g) => (
+                                    <button
+                                        key={g}
+                                        onClick={() => setSelectedGenre(g)}
+                                        className={`text-[10px] px-2.5 py-1 border font-bold ${
+                                            selectedGenre === g
+                                                ? 'bg-amber-400 text-black border-amber-400'
+                                                : 'bg-zinc-900 text-zinc-300 border-zinc-800'
+                                        }`}
+                                    >
+                                        {g}
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                )}
+
+                {/* Pörgetés gomb */}
+                <button
+                    onClick={handleSpin}
+                    disabled={loading}
+                    className="px-5 py-3 bg-amber-500 hover:bg-amber-400 text-black font-black text-xs uppercase tracking-wider shadow-[4px_4px_0px_0px_#000] active:translate-x-1 active:translate-y-1 transition flex items-center gap-2 mb-5"
+                >
+                    <RotateCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+                    {loading ? 'KERESÉS...' : 'PÖRGETÉS / ÚJRAPÖRGETÉS'}
+                </button>
+
+                {seedTitle && (
+                    <div className="mb-4 text-xs text-amber-300 bg-amber-500/10 border border-amber-500/30 px-3 py-2">
+                        Mivel tetszett a(z) <strong className="underline">{seedTitle}</strong>, ezeket ajánljuk:
+                    </div>
+                )}
+
+                {error && (
+                    <div className="mb-4 text-xs text-red-400 bg-red-950/50 border border-red-800 p-3">
+                        {error}
+                    </div>
+                )}
+
+                {/* 3 SORSOLT KÁRTYA - items-start biztosítja, hogy csak a lenyitott doboz nőjön meg! */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-start">
+                    {picks.map((item, idx) => {
+                        const key = item.tmdb_id || idx;
+                        const isExpanded = !!expandedIds[key];
+                        const isAlreadyAdded =
+                            addedIds.includes(item.tmdb_id) ||
+                            movies.some((m) => m.tmdb_id === item.tmdb_id);
+
+                        return (
+                            <div
+                                key={key}
+                                className="bg-zinc-900 border border-amber-500/40 flex flex-col justify-between p-4 shadow-lg"
+                            >
+                                <div>
+                                    <div className="flex gap-3">
+                                        <img
+                                            src={
+                                                item.poster_path
+                                                    ? `https://image.tmdb.org/t/p/w200${item.poster_path}`
+                                                    : 'https://placehold.co/150x220/18181b/f59e0b?text=FILM'
+                                            }
+                                            alt={item.title}
+                                            className="w-20 h-28 object-cover border border-zinc-800 flex-shrink-0"
+                                        />
+                                        <div className="min-w-0 flex-1">
+                                            <div className="flex justify-between items-start gap-1">
+                        <span className="text-[9px] px-1.5 py-0.5 border border-amber-500/40 text-amber-300 font-bold uppercase">
+                          {item.media_type === 'tv' ? 'SOROZAT' : 'FILM'}
+                        </span>
+                                                <span className="text-xs bg-amber-400 text-black px-1.5 py-0.5 font-bold">
+                          ★ {item.vote_average}
+                        </span>
+                                            </div>
+                                            <h3 className="font-bold text-sm text-amber-100 mt-1.5 leading-tight">
+                                                {item.title}
+                                            </h3>
+                                            <div className="text-[10px] text-zinc-500 mt-0.5">
+                                                {item.release_year} {item.imdb_id ? `• ${item.imdb_id}` : ''}
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div className="flex flex-wrap gap-1 my-2.5">
+                                        {(item.genres || []).map((g) => (
+                                            <span
+                                                key={g}
+                                                className="text-[9px] px-1.5 py-0.5 bg-zinc-800 text-amber-200/80 border border-zinc-700"
+                                            >
+                        {g}
+                      </span>
+                                        ))}
+                                    </div>
+
+                                    <p
+                                        className={`text-xs text-zinc-400 leading-relaxed ${
+                                            isExpanded ? '' : 'line-clamp-3'
+                                        }`}
+                                    >
+                                        {item.overview}
+                                    </p>
+                                    {item.overview && item.overview.length > 100 && (
+                                        <button
+                                            onClick={() => toggleExpand(key)}
+                                            className="text-[10px] text-amber-400 hover:underline mt-1"
+                                        >
+                                            {isExpanded ? '▲ Kevesebb' : '▼ Tovább'}
+                                        </button>
+                                    )}
+                                </div>
+
+                                <div className="pt-3 mt-3 border-t border-dashed border-zinc-800 flex items-center justify-between gap-2">
+                                    <a
+                                        href={item.trailer_url}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-amber-200 text-[10px] font-bold uppercase flex items-center gap-1"
+                                    >
+                                        <Play className="w-3 h-3" /> ELŐZETES
+                                    </a>
+
+                                    {mode !== 'local' && (
+                                        <button
+                                            onClick={() => handleQuickAdd(item)}
+                                            disabled={isAlreadyAdded}
+                                            className={`px-3 py-1.5 text-[10px] font-bold uppercase flex items-center gap-1 border ${
+                                                isAlreadyAdded
+                                                    ? 'bg-emerald-950 text-emerald-300 border-emerald-700'
+                                                    : 'bg-amber-400 hover:bg-amber-300 text-black border-amber-400'
+                                            }`}
+                                        >
+                                            <Plus className="w-3 h-3" />
+                                            {isAlreadyAdded ? 'MENTVE' : 'HOZZÁAD'}
+                                        </button>
+                                    )}
+                                </div>
+                            </div>
+                        );
+                    })}
+                </div>
+            </div>
+        </div>
+    );
+}
