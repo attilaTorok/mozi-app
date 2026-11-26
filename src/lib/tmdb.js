@@ -92,7 +92,7 @@ export async function fetchMediaDetailsByTmdb(tmdbId, mediaType) {
             };
 
     return {
-        imdb_id: details.external_ids?.imdb_id || null,
+        imdb_id: details.external_ids?.imdb_id || `tmdb_${details.id}`,
         tmdb_id: details.id,
         title,
         media_type: mediaType,
