@@ -1,0 +1,78 @@
+@import "tailwindcss";
+
+/* Nordic Cozy design tokens */
+@theme {
+  --color-canvas: #FAF7F2;
+  --color-surface: #FFFFFF;
+  --color-subtle: #F4EFE6;
+  --color-line: #E6DFD5;
+  --color-primary: #C85A32;
+  --color-primary-hover: #AF4924;
+  --color-sage: #3F6250;
+  --color-sage-soft: #E4ECE7;
+  --color-ink: #2E2924;
+  --color-muted: #7A6F63;
+
+  --font-heading: "Playfair Display Variable", Georgia, "Times New Roman", serif;
+  --font-sans: "Plus Jakarta Sans Variable", Inter, ui-sans-serif, system-ui, sans-serif;
+}
+
+@layer base {
+  html {
+    background-color: var(--color-canvas);
+    -webkit-tap-highlight-color: transparent;
+  }
+  body {
+    @apply bg-canvas text-ink font-sans antialiased;
+    min-height: 100dvh;
+  }
+  h1, h2, h3, h4 {
+    @apply font-heading;
+  }
+  button, a, input, select, textarea {
+    @apply outline-none;
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 2px;
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-surface border border-line rounded-2xl shadow-sm;
+  }
+  /* Tailwind v4: custom classes can't be @apply'd, so each variant lists the base utilities. */
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold
+           transition-colors disabled:opacity-50 disabled:cursor-not-allowed min-h-11 cursor-pointer
+           bg-primary text-white hover:bg-primary-hover;
+  }
+  .btn-secondary {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold
+           transition-colors disabled:opacity-50 disabled:cursor-not-allowed min-h-11 cursor-pointer
+           bg-sage text-white hover:bg-sage/90;
+  }
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold
+           transition-colors disabled:opacity-50 disabled:cursor-not-allowed min-h-11 cursor-pointer
+           bg-subtle text-ink border border-line hover:bg-line/60;
+  }
+  .btn-danger {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold
+           transition-colors disabled:opacity-50 disabled:cursor-not-allowed min-h-11 cursor-pointer
+           bg-transparent text-primary border border-primary/40 hover:bg-primary/10;
+  }
+  .input {
+    @apply w-full rounded-xl border border-line bg-surface px-3.5 py-2.5 text-base text-ink
+           placeholder:text-muted/70 focus:border-primary min-h-11;
+  }
+  .label {
+    @apply mb-1 block text-sm font-semibold text-muted;
+  }
+  .chip {
+    @apply inline-flex items-center rounded-full bg-subtle border border-line px-2.5 py-0.5 text-xs font-medium text-muted;
+  }
+}
+
+

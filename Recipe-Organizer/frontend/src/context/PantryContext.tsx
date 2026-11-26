@@ -1,0 +1,142 @@
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { db, isNetworkError } from '../lib/dbClient'
+import { readList, STORE_KEYS, writeStore } from '../lib/offlineStore'
+import { normalize } from '../lib/recipes'
+import type { NewPantryItem, PantryItem } from '../types'
+
+interface PantryValue {
+  items: PantryItem[]
+  loading: boolean
+  stale: boolean
+  refresh: () => Promise<void>
+  /** Adds the item; if a product with the same name and unit exists it is merged. Returns true when merged. */
+  add: (item: NewPantryItem) => Promise<boolean>
+  /** ± stepper: changes the amount (never below 0). */
+  adjust: (id: string, delta: number) => Promise<void>
+  update: (id: string, changes: Partial<Pick<PantryItem, 'amount' | 'expires_at'>>) => Promise<void>
+  remove: (id: string) => Promise<void>
+}
+
+const PantryContext = createContext<PantryValue | null>(null)
+
+function slim(r: PantryItem): PantryItem {
+  return { ...r, amount: Number(r.amount) }
+}
+
+function sortItems(list: PantryItem[]): PantryItem[] {
+  // expires_at ASC NULLS LAST, then alphabetical
+  return [...list].sort((a, b) => {
+    if (a.expires_at !== b.expires_at) {
+      if (!a.expires_at) return 1
+      if (!b.expires_at) return -1
+      return a.expires_at.localeCompare(b.expires_at)
+    }
+    return a.item_name.localeCompare(b.item_name, 'hu')
+  })
+}
+
+export function PantryProvider({ children }: { children: ReactNode }) {
+  const [items, setItems] = useState<PantryItem[]>(() => sortItems(readList<PantryItem>(STORE_KEYS.pantry)))
+  const [loading, setLoading] = useState(true)
+  const [stale, setStale] = useState(false)
+
+  const store = useCallback((updater: (prev: PantryItem[]) => PantryItem[]) => {
+    setItems((prev) => {
+      const next = sortItems(updater(prev))
+      writeStore(STORE_KEYS.pantry, next)
+      return next
+    })
+  }, [])
+
+  const refresh = useCallback(async () => {
+    try {
+      const { data } = await db.from('pantry_items').select('*').throwOnError()
+      const list = sortItems(((data ?? []) as PantryItem[]).map(slim))
+      setItems(list)
+      writeStore(STORE_KEYS.pantry, list)
+      setStale(false)
+    } catch (e) {
+      if (isNetworkError(e)) setStale(true)
+      else console.error(e)
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    void refresh()
+    const onOnline = () => void refresh()
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void refresh()
+    }
+    window.addEventListener('online', onOnline)
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      window.removeEventListener('online', onOnline)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+  }, [refresh])
+
+  const patch = useCallback(
+    async (id: string, changes: Partial<Pick<PantryItem, 'amount' | 'expires_at'>>) => {
+      const { data } = await db
+        .from('pantry_items')
+        .update({ ...changes, updated_at: new Date().toISOString() })
+        .eq('id', id)
+        .select()
+        .single()
+        .throwOnError()
+      const row = slim(data as PantryItem)
+      store((prev) => prev.map((i) => (i.id === id ? row : i)))
+    },
+    [store],
+  )
+
+  const add = useCallback(
+    async (item: NewPantryItem) => {
+      const existing = items.find(
+        (i) => normalize(i.item_name) === normalize(item.item_name) && i.unit.trim().toLowerCase() === item.unit.trim().toLowerCase(),
+      )
+      if (existing) {
+        // Smart merge: sum the amounts, keep the nearest expiration date.
+        const dates = [existing.expires_at, item.expires_at].filter((d): d is string => Boolean(d)).sort()
+        await patch(existing.id, { amount: existing.amount + item.amount, expires_at: dates[0] ?? null })
+        return true
+      }
+      const { data } = await db.from('pantry_items').insert(item).select().single().throwOnError()
+      store((prev) => [...prev, slim(data as PantryItem)])
+      return false
+    },
+    [items, patch, store],
+  )
+
+  const adjust = useCallback(
+    async (id: string, delta: number) => {
+      const cur = items.find((i) => i.id === id)
+      if (!cur) return
+      await patch(id, { amount: Math.max(0, cur.amount + delta) })
+    },
+    [items, patch],
+  )
+
+  const remove = useCallback(
+    async (id: string) => {
+      await db.from('pantry_items').delete().eq('id', id).throwOnError()
+      store((prev) => prev.filter((i) => i.id !== id))
+    },
+    [store],
+  )
+
+  const value = useMemo(
+    () => ({ items, loading, stale, refresh, add, adjust, update: patch, remove }),
+    [items, loading, stale, refresh, add, adjust, patch, remove],
+  )
+  return <PantryContext.Provider value={value}>{children}</PantryContext.Provider>
+}
+
+export function usePantry(): PantryValue {
+  const ctx = useContext(PantryContext)
+  if (!ctx) throw new Error('usePantry must be used inside PantryProvider')
+  return ctx
+}
+
