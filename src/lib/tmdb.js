@@ -1,6 +1,8 @@
-import { config } from './config';
-
 const BASE_URL = 'https://api.themoviedb.org/3';
+
+function getApiKey() {
+    return import.meta.env.VITE_TMDB_API_KEY || '';
+}
 
 export function extractImdbId(input) {
     if (!input) return null;
@@ -43,7 +45,7 @@ function computeSeasonStats(details) {
 }
 
 export async function fetchMediaDetailsByTmdb(tmdbId, mediaType) {
-    const apiKey = config.tmdbApiKey;
+    const apiKey = getApiKey();
     if (!apiKey) throw new Error('Hiányzik a TMDB API kulcs!');
 
     const detailsRes = await fetch(
@@ -107,7 +109,7 @@ export async function fetchMediaDetailsByTmdb(tmdbId, mediaType) {
 }
 
 export async function fetchByImdbId(imdbId) {
-    const apiKey = config.tmdbApiKey;
+    const apiKey = getApiKey();
     if (!apiKey) throw new Error('Hiányzik a TMDB API kulcs!');
 
     const findRes = await fetch(
@@ -137,7 +139,7 @@ export async function fetchByImdbId(imdbId) {
 }
 
 export async function discoverRandomMedia(mediaType = 'movie', excludeTmdbIds = []) {
-    const apiKey = config.tmdbApiKey;
+    const apiKey = getApiKey();
     const randomPage = Math.floor(Math.random() * 15) + 1;
 
     const res = await fetch(
@@ -157,7 +159,7 @@ export async function discoverRandomMedia(mediaType = 'movie', excludeTmdbIds = 
 }
 
 export async function discoverBasedOnLiked(likedMovies = [], excludeTmdbIds = []) {
-    const apiKey = config.tmdbApiKey;
+    const apiKey = getApiKey();
     if (!likedMovies.length) {
         throw new Error('Nincs még "Tetszett" jelölésű filmed vagy sorozatod!');
     }
