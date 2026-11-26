@@ -142,6 +142,24 @@ export default function App() {
                 )}
             </div>
 
+            {/* GLOBÁLIS HIBA ÉRTESÍTÉS (TOAST) */}
+            {error && (
+                <div className="fixed bottom-4 right-4 left-4 sm:left-auto sm:max-w-md z-50 bg-red-950 border-2 border-red-500 text-red-200 p-4 shadow-[4px_4px_0px_0px_#000] flex items-start justify-between gap-3 text-xs">
+                    <div>
+                        <div className="font-black text-red-400 uppercase mb-0.5">
+                            RENDSZERHIBA
+                        </div>
+                        <div>{error}</div>
+                    </div>
+                    <button
+                        onClick={clearError}
+                        className="text-red-400 hover:text-white font-bold px-1.5"
+                    >
+                        ✕
+                    </button>
+                </div>
+            )}
+
             {/* SORSOLÓ MODÁL */}
             <RouletteModal
                 isOpen={isRouletteOpen}
