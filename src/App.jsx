@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Film, Ticket, RefreshCw } from 'lucide-react';
-import { PinLock } from './components/PinLock';
-import { AddByImdb } from './components/AddByImdb';
+import PinLock from './components/PinLock';
+import AddByImdb from './components/AddByImdb';
 import { FilterBar } from './components/FilterBar';
 import { TicketCard } from './components/TicketCard';
 import { RouletteModal } from './components/RouletteModal';
