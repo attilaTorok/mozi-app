@@ -1,15 +1,8 @@
-import { useMemo, useState } from 'react'
+﻿import { useMemo, useState } from 'react'
 import { Link } from 'react-router'
 import { t } from '../strings'
 import { useRecipes } from '../context/RecipesContext'
-import {
-  filterRecipes,
-  findDormant,
-  sortRecipes,
-  uniqueCreators,
-  uniqueTags,
-  type SortKey,
-} from '../lib/recipes'
+import { filterRecipes, findDormant, sortRecipes, uniqueCreators, uniqueTags, type SortKey } from '../lib/recipes'
 import RecipeCard from '../components/RecipeCard'
 import type { CostTier } from '../types'
 
@@ -51,66 +44,68 @@ export default function RecipesPage() {
         </Link>
       )}
 
-      <div className="flex flex-col gap-3 sm:flex-row">
-        <input
-          type="search"
-          className="input flex-1"
-          placeholder={t.search.placeholder}
-          aria-label={t.common.search}
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
-        <select
-          className="input sm:w-64"
-          aria-label={t.common.sortBy}
-          value={sort}
-          onChange={(e) => setSort(e.target.value as SortKey)}
-        >
-          {sortOptions.map((o) => (
-            <option key={o.key} value={o.key}>
-              {o.label}
-            </option>
-          ))}
-        </select>
-      </div>
-      <p className="-mt-2 text-sm text-muted">{t.search.pantryTip}</p>
+      <section className="card space-y-3 p-4 sm:p-5" aria-label={t.common.search}>
+        <div className="flex flex-col gap-3 sm:flex-row">
+          <input
+            type="search"
+            className="input flex-1"
+            placeholder={t.search.placeholder}
+            aria-label={t.common.search}
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+          <select
+            className="input sm:w-64"
+            aria-label={t.common.sortBy}
+            value={sort}
+            onChange={(e) => setSort(e.target.value as SortKey)}
+          >
+            {sortOptions.map((o) => (
+              <option key={o.key} value={o.key}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <p className="px-1 text-sm text-muted">{t.search.pantryTip}</p>
 
-      <div className="grid gap-3 sm:grid-cols-3">
-        <select className="input" aria-label={t.search.allTags} value={tag} onChange={(e) => setTag(e.target.value)}>
-          <option value="">{t.search.allTags}</option>
-          {tags.map((x) => (
-            <option key={x} value={x}>
-              {x}
-            </option>
-          ))}
-        </select>
-        <select
-          className="input"
-          aria-label={t.search.allCreators}
-          value={creator}
-          onChange={(e) => setCreator(e.target.value)}
-        >
-          <option value="">{t.search.allCreators}</option>
-          {creators.map((x) => (
-            <option key={x} value={x}>
-              👤 {x}
-            </option>
-          ))}
-        </select>
-        <select
-          className="input"
-          aria-label={t.search.allCosts}
-          value={cost}
-          onChange={(e) => setCost(e.target.value as CostTier | '')}
-        >
-          <option value="">{t.search.allCosts}</option>
-          {(['CHEAP', 'MODERATE', 'EXPENSIVE'] as const).map((c) => (
-            <option key={c} value={c}>
-              {t.cost[c]}
-            </option>
-          ))}
-        </select>
-      </div>
+        <div className="grid gap-3 border-t border-line pt-3 sm:grid-cols-3">
+          <select className="input" aria-label={t.search.allTags} value={tag} onChange={(e) => setTag(e.target.value)}>
+            <option value="">{t.search.allTags}</option>
+            {tags.map((x) => (
+              <option key={x} value={x}>
+                {x}
+              </option>
+            ))}
+          </select>
+          <select
+            className="input"
+            aria-label={t.search.allCreators}
+            value={creator}
+            onChange={(e) => setCreator(e.target.value)}
+          >
+            <option value="">{t.search.allCreators}</option>
+            {creators.map((x) => (
+              <option key={x} value={x}>
+                👤 {x}
+              </option>
+            ))}
+          </select>
+          <select
+            className="input"
+            aria-label={t.search.allCosts}
+            value={cost}
+            onChange={(e) => setCost(e.target.value as CostTier | '')}
+          >
+            <option value="">{t.search.allCosts}</option>
+            {(['CHEAP', 'MODERATE', 'EXPENSIVE'] as const).map((c) => (
+              <option key={c} value={c}>
+                {t.cost[c]}
+              </option>
+            ))}
+          </select>
+        </div>
+      </section>
 
       {loading && recipes.length === 0 ? (
         <p className="py-10 text-center text-muted">{t.common.loading}</p>
@@ -133,4 +128,3 @@ export default function RecipesPage() {
     </div>
   )
 }
-

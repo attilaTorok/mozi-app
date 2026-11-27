@@ -91,10 +91,17 @@ export function pickRandom<T>(items: T[], count: number): T[] {
 }
 
 /** Distinct, non-empty `added_by` values (for chips + datalist autocomplete). */
+export const DEFAULT_CREATORS = ['Attila', 'Párom', 'Közös'] as const
+
+/** Default creators first, then any other `added_by` values found in the recipes. */
 export function uniqueCreators(recipes: Recipe[]): string[] {
-  const set = new Set<string>()
-  for (const r of recipes) if (r.added_by?.trim()) set.add(r.added_by.trim())
-  return [...set].sort((a, b) => a.localeCompare(b, 'hu'))
+  const defaults: readonly string[] = DEFAULT_CREATORS
+  const extra = new Set<string>()
+  for (const r of recipes) {
+    const name = r.added_by?.trim()
+    if (name && !defaults.includes(name)) extra.add(name)
+  }
+  return [...defaults, ...[...extra].sort((a, b) => a.localeCompare(b, 'hu'))]
 }
 
 export function uniqueTags(recipes: Recipe[]): string[] {

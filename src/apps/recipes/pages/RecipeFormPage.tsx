@@ -229,36 +229,39 @@ function RecipeForm({ existing }: { existing?: Recipe }) {
         </div>
 
         <div>
-          <label className="label" htmlFor="added-by">
+          <span className="label" id="added-by-label">
             {t.form.addedBy}
-          </label>
-          <input
-            id="added-by"
-            className="input"
-            list="creators"
-            maxLength={60}
-            value={form.added_by}
-            onChange={(e) => set('added_by', e.target.value)}
-          />
-          <datalist id="creators">
-            {creators.map((c) => (
-              <option key={c} value={c} />
-            ))}
-          </datalist>
-          {creators.length > 0 && (
-            <div className="mt-2 flex flex-wrap gap-1.5">
-              {creators.map((c) => (
+          </span>
+          <div role="radiogroup" aria-labelledby="added-by-label" className="flex flex-wrap gap-2">
+            {creators.map((c) => {
+              const active = form.added_by === c
+              return (
                 <button
                   key={c}
                   type="button"
-                  onClick={() => set('added_by', c)}
-                  className={`chip cursor-pointer ${form.added_by === c ? 'border-primary bg-primary/10 text-primary' : ''}`}
+                  role="radio"
+                  aria-checked={active}
+                  onClick={() => set('added_by', active ? '' : c)}
+                  className={`min-h-11 rounded-xl border px-4 py-2 text-sm font-semibold transition-colors ${
+                    active
+                      ? 'border-primary bg-primary text-white shadow-sm'
+                      : 'border-line bg-surface text-ink hover:bg-subtle'
+                  }`}
                 >
                   👤 {c}
                 </button>
-              ))}
-            </div>
-          )}
+              )
+            })}
+          </div>
+          <input
+            id="added-by"
+            className="input mt-3"
+            maxLength={60}
+            placeholder="Más név…"
+            aria-labelledby="added-by-label"
+            value={creators.includes(form.added_by) ? '' : form.added_by}
+            onChange={(e) => set('added_by', e.target.value)}
+          />
         </div>
 
         <div className="grid gap-4 sm:grid-cols-3">

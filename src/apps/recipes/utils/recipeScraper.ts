@@ -31,29 +31,92 @@ const MAX_INGREDIENTS = 100
 export async function scrapeRecipe(url: string): Promise<ScrapeResult> {
   const host = hostOf(url)
   const entry = HANDLERS.find((h) => host === h.domain || host.endsWith(`.${h.domain}`))
-  const page = await loadPage(url, entry?.jina ?? false)
-  if (!page) reportGlobalError(`Nem sikerült letölteni a receptet: ${url}`)
+  const failures: string[] = []
+  const page = await loadPage(url, entry?.jina ?? false, failures)
+  if (!page) {
+    reportGlobalError(`Recept importálás sikertelen (${host || url}): ${failures.join(' | ') || 'ismeretlen hiba'}`)
+  }
   const result = page ? (entry?.handler ?? parseDefault)(page, url) : emptyResult(url)
+  if (page && result.ingredients.length === 0) {
+    reportGlobalError(`A letöltött oldalon nem található Recipe (ld+json) adat: ${host || url}`)
+  }
   if (!result.title) result.title = titleFromUrl(url)
   result.fallback = !result.title || result.ingredients.length === 0
   return result
 }
 
-async function loadPage(url: string, useJina: boolean): Promise<Page | null> {
-  const get = async (jina: boolean): Promise<Page | null> => {
+const FETCH_TIMEOUT_MS = 20_000
+
+/** Public CORS proxies used when the /api/scrape function is not deployed. */
+const CORS_PROXIES: { name: string; fetch: (url: string) => Promise<string> }[] = [
+  {
+    name: 'allorigins',
+    fetch: async (url) => {
+      const res = await fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(url)}`, {
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const data = (await res.json()) as { contents?: string; status?: { http_code?: number } }
+      const code = data.status?.http_code
+      if (code && code >= 400) throw new Error(`cél oldal HTTP ${code}`)
+      return data.contents ?? ''
+    },
+  },
+  {
+    name: 'corsproxy.io',
+    fetch: async (url) => {
+      const res = await fetch(`https://corsproxy.io/?url=${encodeURIComponent(url)}`, {
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      return res.text()
+    },
+  },
+]
+
+class ApiMissingError extends Error {}
+
+const reason = (e: unknown) => (e instanceof Error ? e.message : String(e))
+
+/**
+ * A static-asset host answers unknown paths with the SPA index.html (HTTP 200),
+ * so a real /api/scrape response is recognized by its X-Scrape-Source header.
+ */
+async function viaApi(url: string, jina: boolean): Promise<Page> {
+  const res = await fetch(`/api/scrape?url=${encodeURIComponent(url)}${jina ? '&jina=1' : ''}`, {
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS + 15_000),
+  })
+  const source = res.headers.get('X-Scrape-Source')
+  if (!source) throw new ApiMissingError(`/api/scrape nem elérhető (HTTP ${res.status})`)
+  if (!res.ok) throw new Error(`/api/scrape: cél oldal HTTP ${res.status}`)
+  return { body: await res.text(), source: source === 'jina' ? 'jina' : 'direct' }
+}
+
+async function loadPage(url: string, useJina: boolean, failures: string[]): Promise<Page | null> {
+  let apiMissing = false
+  try {
+    return await viaApi(url, useJina)
+  } catch (e) {
+    apiMissing = e instanceof ApiMissingError
+    failures.push(reason(e))
+  }
+  if (!useJina && !apiMissing) {
     try {
-      const res = await fetch(`/api/scrape?url=${encodeURIComponent(url)}${jina ? '&jina=1' : ''}`)
-      if (!res.ok) {
-        console.warn(`/api/scrape → HTTP ${res.status}`)
-        return null
-      }
-      const source = res.headers.get('X-Scrape-Source') === 'jina' ? 'jina' : 'direct'
-      return { body: await res.text(), source }
-    } catch {
-      return null
+      return await viaApi(url, true)
+    } catch (e) {
+      if (!failures.includes(reason(e))) failures.push(reason(e))
     }
   }
-  return (await get(useJina)) ?? (useJina ? null : await get(true))
+  for (const proxy of CORS_PROXIES) {
+    try {
+      const body = await proxy.fetch(url)
+      if (!body.trim()) throw new Error('üres válasz')
+      return { body, source: 'direct' }
+    } catch (e) {
+      failures.push(`${proxy.name}: ${reason(e)}`)
+    }
+  }
+  return null
 }
 
 function emptyResult(url: string): ScrapeResult {

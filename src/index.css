@@ -64,6 +64,9 @@ body {
 }
 
 @layer base {
+  .recipes-app {
+    color-scheme: light;
+  }
   .recipes-app h1, .recipes-app h2, .recipes-app h3, .recipes-app h4 {
     @apply font-heading;
   }
@@ -102,11 +105,22 @@ body {
            bg-transparent text-primary border border-primary/40 hover:bg-primary/10;
   }
   .input {
-    @apply w-full rounded-xl border border-line bg-surface px-3.5 py-2.5 text-base text-ink
-           placeholder:text-muted/70 focus:border-primary min-h-11;
+    @apply block w-full min-h-11 rounded-xl border border-line bg-surface px-4 py-2.5 text-base text-ink shadow-sm
+           transition-[border-color,box-shadow] placeholder:text-muted/70
+           focus:border-primary focus:ring-4 focus:ring-primary/15 focus:outline-none;
+  }
+  select.input {
+    @apply cursor-pointer appearance-none truncate pr-11;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%237A6F63' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 0.9rem center;
+    background-size: 1.1rem;
+  }
+  select.input::-ms-expand {
+    display: none;
   }
   .label {
-    @apply mb-1 block text-sm font-semibold text-muted;
+    @apply mb-1.5 block text-sm font-semibold text-muted;
   }
   .chip {
     @apply inline-flex items-center rounded-full bg-subtle border border-line px-2.5 py-0.5 text-xs font-medium text-muted;
