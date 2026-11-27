@@ -1,122 +1,65 @@
 import type { Ingredient, ScrapeResult } from '../types'
-import { reportGlobalError } from '../../../shared/ErrorContext'
 
 /**
- * Recipe import: fetches the page through the /api/scrape proxy (Vite dev middleware locally,
- * Cloudflare Pages Function in production) and dispatches to a site-specific handler by domain.
- * The proxy returns HTML ("direct") or Jina Reader Markdown ("jina"), see X-Scrape-Source.
+ * Recipe import: fetches the page HTML through the /api/scrape Worker endpoint (src/worker.ts;
+ * Vite dev middleware locally), then parses Schema.org JSON-LD with site-specific HTML fallbacks.
+ * Throws a descriptive Error when the page cannot be fetched or contains no recipe data.
  */
 
 type Json = unknown
 type JsonObject = Record<string, Json>
 
-interface Page {
-  body: string
-  source: 'direct' | 'jina'
-}
-
-type Handler = (page: Page, url: string) => ScrapeResult
+type Handler = (doc: Document, res: ScrapeResult) => void
 
 const isObject = (v: Json): v is JsonObject => typeof v === 'object' && v !== null && !Array.isArray(v)
 
-const HANDLERS: { domain: string; handler: Handler; jina?: boolean }[] = [
-  { domain: 'streetkitchen.hu', handler: parseStreetKitchen, jina: true },
-  { domain: 'nosalty.hu', handler: parseNosalty },
-  { domain: 'mindmegette.hu', handler: parseMindmegette },
+const HANDLERS: { domain: string; handler: Handler }[] = [
+  { domain: 'streetkitchen.hu', handler: fallbackStreetKitchen },
+  { domain: 'nosalty.hu', handler: fallbackNosalty },
+  { domain: 'mindmegette.hu', handler: fallbackMindmegette },
 ]
 
 const MAX_STEPS = 100
 const MAX_INGREDIENTS = 100
+const FETCH_TIMEOUT_MS = 20_000
 
 export async function scrapeRecipe(url: string): Promise<ScrapeResult> {
   const host = hostOf(url)
-  const entry = HANDLERS.find((h) => host === h.domain || host.endsWith(`.${h.domain}`))
-  const failures: string[] = []
-  const page = await loadPage(url, entry?.jina ?? false, failures)
-  if (!page) {
-    reportGlobalError(`Recept importálás sikertelen (${host || url}): ${failures.join(' | ') || 'ismeretlen hiba'}`)
+  if (!host) throw new Error('Érvénytelen URL.')
+  const html = await fetchHtml(url)
+  const doc = new DOMParser().parseFromString(html, 'text/html')
+  const res = emptyResult(url)
+
+  const recipe = findRecipeInDocument(doc)
+  if (recipe) fillFromRecipe(res, recipe)
+  if (res.ingredients.length === 0 || res.steps.length === 0) {
+    HANDLERS.find((h) => host === h.domain || host.endsWith(`.${h.domain}`))?.handler(doc, res)
   }
-  const result = page ? (entry?.handler ?? parseDefault)(page, url) : emptyResult(url)
-  if (page && result.ingredients.length === 0) {
-    reportGlobalError(`A letöltött oldalon nem található Recipe (ld+json) adat: ${host || url}`)
+  if (!res.title) {
+    res.title = clean(doc.querySelector('h1')?.textContent ?? doc.querySelector('title')?.textContent ?? '', 200)
   }
-  if (!result.title) result.title = titleFromUrl(url)
-  result.fallback = !result.title || result.ingredients.length === 0
-  return result
+  if (!recipe && res.ingredients.length === 0) {
+    throw new Error(`Nem található receptadat az oldalon (${host}).`)
+  }
+  if (!res.title) res.title = titleFromUrl(url)
+  res.fallback = !res.title || res.ingredients.length === 0
+  return res
 }
 
-const FETCH_TIMEOUT_MS = 20_000
-
-/** Public CORS proxies used when the /api/scrape function is not deployed. */
-const CORS_PROXIES: { name: string; fetch: (url: string) => Promise<string> }[] = [
-  {
-    name: 'allorigins',
-    fetch: async (url) => {
-      const res = await fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(url)}`, {
-        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-      })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const data = (await res.json()) as { contents?: string; status?: { http_code?: number } }
-      const code = data.status?.http_code
-      if (code && code >= 400) throw new Error(`cél oldal HTTP ${code}`)
-      return data.contents ?? ''
-    },
-  },
-  {
-    name: 'corsproxy.io',
-    fetch: async (url) => {
-      const res = await fetch(`https://corsproxy.io/?url=${encodeURIComponent(url)}`, {
-        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-      })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      return res.text()
-    },
-  },
-]
-
-class ApiMissingError extends Error {}
-
-const reason = (e: unknown) => (e instanceof Error ? e.message : String(e))
-
-/**
- * A static-asset host answers unknown paths with the SPA index.html (HTTP 200),
- * so a real /api/scrape response is recognized by its X-Scrape-Source header.
- */
-async function viaApi(url: string, jina: boolean): Promise<Page> {
-  const res = await fetch(`/api/scrape?url=${encodeURIComponent(url)}${jina ? '&jina=1' : ''}`, {
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS + 15_000),
-  })
-  const source = res.headers.get('X-Scrape-Source')
-  if (!source) throw new ApiMissingError(`/api/scrape nem elérhető (HTTP ${res.status})`)
-  if (!res.ok) throw new Error(`/api/scrape: cél oldal HTTP ${res.status}`)
-  return { body: await res.text(), source: source === 'jina' ? 'jina' : 'direct' }
-}
-
-async function loadPage(url: string, useJina: boolean, failures: string[]): Promise<Page | null> {
-  let apiMissing = false
+async function fetchHtml(url: string): Promise<string> {
+  let res: Response
   try {
-    return await viaApi(url, useJina)
+    res = await fetch(`/api/scrape?url=${encodeURIComponent(url)}`, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) })
   } catch (e) {
-    apiMissing = e instanceof ApiMissingError
-    failures.push(reason(e))
+    const timedOut = e instanceof DOMException && e.name === 'TimeoutError'
+    throw new Error(timedOut ? 'Időtúllépés a recept letöltésekor.' : 'Hálózati hiba a recept letöltésekor.')
   }
-  if (!useJina && !apiMissing) {
-    try {
-      return await viaApi(url, true)
-    } catch (e) {
-      if (!failures.includes(reason(e))) failures.push(reason(e))
-    }
-  }
-  for (const proxy of CORS_PROXIES) {
-    try {
-      const body = await proxy.fetch(url)
-      if (!body.trim()) throw new Error('üres válasz')
-      return { body, source: 'direct' }
-    } catch (e) {
-      failures.push(`${proxy.name}: ${reason(e)}`)
-    }
-  }
-  return null
+  const isJson = res.headers.get('Content-Type')?.includes('application/json') ?? false
+  if (!isJson) throw new Error(`A /api/scrape végpont nem elérhető (HTTP ${res.status}).`)
+  const data = (await res.json()) as { html?: string; error?: string }
+  if (!res.ok || data.error) throw new Error(`Letöltési hiba: ${data.error ?? `HTTP ${res.status}`}`)
+  if (!data.html?.trim()) throw new Error('A letöltött oldal üres.')
+  return data.html
 }
 
 function emptyResult(url: string): ScrapeResult {
@@ -140,92 +83,63 @@ function hostOf(url: string): string {
   }
 }
 
-// ------------------------------------------------------------------ handlers
+// ------------------------------------------------------------------ HTML fallbacks
 
-/** streetkitchen.hu: always fetched as Jina Reader Markdown. */
-function parseStreetKitchen(page: Page, url: string): ScrapeResult {
-  const res = emptyResult(url)
-  if (page.source !== 'jina') return parseDefault(page, url)
-  const lines = page.body.split('\n').map((l) => l.trim())
+const texts = (doc: Document, selector: string, max: number): string[] =>
+  [...doc.querySelectorAll(selector)].map((el) => clean(el.textContent ?? '', max)).filter(Boolean)
 
-  const h1 = lines.find((l) => /^#\s+/.test(l))
-  res.title = clean(stripMarkdown(h1?.replace(/^#\s+/, '') ?? jinaTitle(page.body)), 200)
-
-  const prep = /Elkészítési idő:?\s*(\d+)\s*perc/i.exec(page.body)
-  if (prep) res.prep_time_minutes = Number(prep[1])
-
-  const ingStart = lines.findIndex((l) => /^(?:#+\s*)?Hozzávalók:?$/i.test(l))
-  const stepStart = lines.findIndex((l, i) => i > ingStart && /^(?:#+\s*)?Elkészítés:?$/i.test(l))
-
-  if (ingStart !== -1) {
-    const end = stepStart === -1 ? lines.length : stepStart
-    let current: string[] | null = null
-    const flush = () => {
-      const text = clean(stripMarkdown(current?.join(' ') ?? ''), 300)
-      if (text && res.ingredients.length < MAX_INGREDIENTS) res.ingredients.push(parseHungarianIngredient(text))
-      current = null
-    }
-    for (const line of lines.slice(ingStart + 1, end)) {
-      const box = /^[-*]\s*\[[ xX]\]\s*(.*)$/.exec(line)
-      if (box) {
-        flush()
-        current = box[1] ? [box[1]] : []
-      } else if (!line) {
-        continue
-      } else if (line.startsWith('#') || /^[-*]\s/.test(line) || line.startsWith('![')) {
-        flush()
-      } else if (current) {
-        current.push(line)
+/** Fills ingredients/steps from the first selector that yields results. */
+function fillFromSelectors(doc: Document, res: ScrapeResult, ingredients: string[], steps: string[]): void {
+  if (res.ingredients.length === 0) {
+    for (const sel of ingredients) {
+      const found = texts(doc, sel, 300)
+      if (found.length) {
+        res.ingredients = found.slice(0, MAX_INGREDIENTS).map(parseHungarianIngredient)
+        break
       }
     }
-    flush()
   }
-
-  if (stepStart !== -1) {
-    for (const line of lines.slice(stepStart + 1)) {
-      if (line.includes('![Image') || /Ha tetszett|Recept nyomtatása|^www\./i.test(line)) break
-      if (!line || /^[-*_](?:\s*[-*_]){2,}$/.test(line)) continue
-      if (line.startsWith('#')) {
-        if (res.steps.length) break
-        continue
+  if (res.steps.length === 0) {
+    for (const sel of steps) {
+      const found = texts(doc, sel, 5000)
+      if (found.length) {
+        res.steps = found.slice(0, MAX_STEPS)
+        break
       }
-      const duration = parseHuDuration(line)
-      if (duration !== null && res.steps.length === 0) {
-        if (!res.prep_time_minutes) res.prep_time_minutes = duration
-        continue
-      }
-      const step = clean(stripMarkdown(line.replace(/^\d+[.)]\s+/, '')), 5000)
-      if (step && res.steps.length < MAX_STEPS) res.steps.push(step)
     }
   }
-  return res
-}
-
-/** nosalty.hu: JSON-LD with nested HowToSections and "0 " ingredient prefixes. */
-function parseNosalty(page: Page, url: string): ScrapeResult {
-  return parseDefault(page, url)
-}
-
-/** mindmegette.hu: standard JSON-LD. */
-function parseMindmegette(page: Page, url: string): ScrapeResult {
-  return parseDefault(page, url)
-}
-
-/** Generic Schema.org JSON-LD, then <title>/<h1> (or the Jina Markdown title). */
-function parseDefault(page: Page, url: string): ScrapeResult {
-  const res = emptyResult(url)
-  if (page.source === 'jina') {
-    const h1 = page.body.split('\n').find((l) => /^#\s+/.test(l.trim()))
-    res.title = clean(stripMarkdown(jinaTitle(page.body) || h1?.trim().replace(/^#\s+/, '') || ''), 200)
-    return res
+  if (!res.prep_time_minutes) {
+    const m = /(?:Elkészítési|Teljes|Főzési)?\s*idő:?\s*((?:\d+\s*óra)?\s*(?:\d+\s*perc)?)/i.exec(doc.body?.textContent ?? '')
+    const minutes = m ? parseHuDuration(m[1]) : null
+    if (minutes) res.prep_time_minutes = minutes
   }
-  const doc = new DOMParser().parseFromString(page.body, 'text/html')
-  const recipe = findRecipeInDocument(doc)
-  if (recipe) fillFromRecipe(res, recipe)
-  if (!res.title) {
-    res.title = clean(doc.querySelector('h1')?.textContent ?? doc.querySelector('title')?.textContent ?? '', 200)
-  }
-  return res
+}
+
+function fallbackMindmegette(doc: Document, res: ScrapeResult): void {
+  fillFromSelectors(
+    doc,
+    res,
+    ['.recipe-ingredients li', '[class*="ingredient"] li', '.hozzavalok li'],
+    ['.recipe-instructions li', '.recipe-instructions p', '[class*="instruction"] li', '[class*="preparation"] p'],
+  )
+}
+
+function fallbackStreetKitchen(doc: Document, res: ScrapeResult): void {
+  fillFromSelectors(
+    doc,
+    res,
+    ['.ingredients-main dd', '.ingredient-groups li', '[class*="ingredient"] li', '[class*="ingredient"] dd'],
+    ['.recipe-steps li', '.article-content ol li', '[class*="step"] p', '[class*="instruction"] p'],
+  )
+}
+
+function fallbackNosalty(doc: Document, res: ScrapeResult): void {
+  fillFromSelectors(
+    doc,
+    res,
+    ['.m-recipe__ingredient', '[class*="ingredient"] li', '.p-recipe__ingredients li'],
+    ['.m-recipe__step', '[class*="direction"] li', '[class*="step"] p', '.p-recipe__directions li'],
+  )
 }
 
 // ------------------------------------------------------------------ JSON-LD
@@ -368,21 +282,6 @@ function collectTags(r: JsonObject): string[] {
     if (tags.length >= 10) break
   }
   return tags
-}
-
-// ------------------------------------------------------------------ markdown
-
-function jinaTitle(md: string): string {
-  return /^Title:\s*(.+)$/m.exec(md)?.[1]?.trim() ?? ''
-}
-
-/** "[vaj](https://…)" → "vaj", drops images and emphasis markers. */
-function stripMarkdown(s: string): string {
-  return s
-    .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
-    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
-    .replace(/[*_`]+/g, '')
-    .trim()
 }
 
 // ------------------------------------------------------------------ ingredients

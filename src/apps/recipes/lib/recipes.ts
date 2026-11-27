@@ -91,7 +91,7 @@ export function pickRandom<T>(items: T[], count: number): T[] {
 }
 
 /** Distinct, non-empty `added_by` values (for chips + datalist autocomplete). */
-export const DEFAULT_CREATORS = ['Attila', 'Párom', 'Közös'] as const
+export const DEFAULT_CREATORS = ['Attila', 'Szabina'] as const
 
 /** Default creators first, then any other `added_by` values found in the recipes. */
 export function uniqueCreators(recipes: Recipe[]): string[] {

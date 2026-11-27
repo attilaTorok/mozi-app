@@ -1,4 +1,4 @@
-import { useMemo, useState, type FormEvent } from 'react'
+﻿import { useMemo, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import { t } from '../strings'
 import { useRecipes } from '../context/RecipesContext'
@@ -6,6 +6,7 @@ import { errorMessage } from '../lib/dbClient'
 import { normalize, uniqueCreators, uniqueTags } from '../lib/recipes'
 import { parseNumber } from '../lib/format'
 import { scrapeRecipe } from '../utils/recipeScraper'
+import { useGlobalError } from '../../../shared/ErrorContext'
 import RatingStars from '../components/RatingStars'
 import type { CostTier, Recipe, RecipeInput } from '../types'
 
@@ -113,6 +114,7 @@ export default function RecipeFormPage() {
 function RecipeForm({ existing }: { existing?: Recipe }) {
   const navigate = useNavigate()
   const { recipes, create, update } = useRecipes()
+  const { showError } = useGlobalError()
   const creators = useMemo(() => uniqueCreators(recipes), [recipes])
   const allTags = useMemo(() => uniqueTags(recipes), [recipes])
 
@@ -154,7 +156,9 @@ function RecipeForm({ existing }: { existing?: Recipe }) {
         steps: data.steps.length ? data.steps : f.steps,
       }))
       setImportNote({ ok: !data.fallback, text: data.fallback ? t.scrape.fallback : t.scrape.done })
-    } catch {
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err)
+      showError(`Recept importálás sikertelen: ${reason}`)
       setImportNote({ ok: false, text: t.scrape.fallback })
     } finally {
       setImporting(false)
