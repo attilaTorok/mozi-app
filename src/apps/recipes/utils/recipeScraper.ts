@@ -21,19 +21,24 @@ const HANDLERS: { domain: string; handler: Handler }[] = [
 
 const MAX_STEPS = 100
 const MAX_INGREDIENTS = 100
-const FETCH_TIMEOUT_MS = 20_000
+const FETCH_TIMEOUT_MS = 35_000
 
 export async function scrapeRecipe(url: string): Promise<ScrapeResult> {
   const host = hostOf(url)
   if (!host) throw new Error('Érvénytelen URL.')
-  const html = await fetchHtml(url)
+  const { html, markdownText } = await fetchScrape(url)
   const doc = new DOMParser().parseFromString(html, 'text/html')
   const res = emptyResult(url)
+  const textSource = markdownText || html
 
-  const recipe = findRecipeInDocument(doc)
+  const recipe =
+    findRecipeInDocument(doc) ?? findRecipeInText(html) ?? (markdownText ? findRecipeInText(markdownText) : null)
   if (recipe) fillFromRecipe(res, recipe)
   if (res.ingredients.length === 0 || res.steps.length === 0) {
     HANDLERS.find((h) => host === h.domain || host.endsWith(`.${h.domain}`))?.handler(doc, res)
+  }
+  if (res.ingredients.length === 0 || res.steps.length === 0 || !res.title) {
+    fillFromMarkdown(res, textSource)
   }
   if (!res.title) {
     res.title = clean(doc.querySelector('h1')?.textContent ?? doc.querySelector('title')?.textContent ?? '', 200)
@@ -46,7 +51,7 @@ export async function scrapeRecipe(url: string): Promise<ScrapeResult> {
   return res
 }
 
-async function fetchHtml(url: string): Promise<string> {
+async function fetchScrape(url: string): Promise<{ html: string; markdownText: string }> {
   let res: Response
   try {
     res = await fetch(`/api/scrape?url=${encodeURIComponent(url)}`, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) })
@@ -56,10 +61,12 @@ async function fetchHtml(url: string): Promise<string> {
   }
   const isJson = res.headers.get('Content-Type')?.includes('application/json') ?? false
   if (!isJson) throw new Error(`A /api/scrape végpont nem elérhető (HTTP ${res.status}).`)
-  const data = (await res.json()) as { html?: string; error?: string }
+  const data = (await res.json()) as { html?: string; markdownText?: string; error?: string }
   if (!res.ok || data.error) throw new Error(`Letöltési hiba: ${data.error ?? `HTTP ${res.status}`}`)
-  if (!data.html?.trim()) throw new Error('A letöltött oldal üres.')
-  return data.html
+  const html = data.html?.trim() ?? ''
+  const markdownText = data.markdownText?.trim() ?? ''
+  if (!html && !markdownText) throw new Error('A letöltött oldal üres.')
+  return { html: html || markdownText, markdownText: markdownText || html }
 }
 
 function emptyResult(url: string): ScrapeResult {
@@ -151,6 +158,58 @@ function findRecipeInDocument(doc: Document): JsonObject | null {
       if (found) return found
     } catch {
       /* keep looking */
+    }
+  }
+  return null
+}
+
+function findRecipeInText(text: string): JsonObject | null {
+  for (const m of text.matchAll(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)) {
+    try {
+      const found = findRecipe(JSON.parse(m[1].trim()))
+      if (found) return found
+    } catch {
+      /* keep looking */
+    }
+  }
+  for (const m of text.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)) {
+    try {
+      const found = findRecipe(JSON.parse(m[1].trim()))
+      if (found) return found
+    } catch {
+      /* keep looking */
+    }
+  }
+  const marker = /"@type"\s*:\s*"Recipe"/i.exec(text)
+  if (!marker || marker.index === undefined) return null
+  const start = text.lastIndexOf('{', marker.index)
+  if (start < 0) return null
+  const raw = sliceBalancedJson(text, start)
+  if (!raw) return null
+  try {
+    return findRecipe(JSON.parse(raw))
+  } catch {
+    return null
+  }
+}
+
+function sliceBalancedJson(text: string, start: number): string | null {
+  let depth = 0
+  let inString = false
+  let escape = false
+  for (let i = start; i < text.length && i - start < 400_000; i++) {
+    const c = text[i]
+    if (inString) {
+      if (escape) escape = false
+      else if (c === '\\') escape = true
+      else if (c === '"') inString = false
+      continue
+    }
+    if (c === '"') inString = true
+    else if (c === '{') depth++
+    else if (c === '}') {
+      depth--
+      if (depth === 0) return text.slice(start, i + 1)
     }
   }
   return null
@@ -352,6 +411,104 @@ function parseQuantity(q: string): number | null {
 }
 
 // ------------------------------------------------------------------ fallback
+
+const ING_HEADING = /hozzával|alapanyag|ingredients?/i
+const STEP_HEADING = /elkészít|készítés|lépés|instruction|direction|method/i
+const SKIP_LINE = /^(title|url source|published time|markdown content|warning|image \d+):/i
+
+function fillFromMarkdown(res: ScrapeResult, raw: string): void {
+  let text = raw.replace(/\r/g, '')
+  const titleMeta = /^Title:\s*(.+)$/m.exec(text)
+  if (!res.title && titleMeta) res.title = clean(titleMeta[1], 200)
+  const mdStart = text.search(/^Markdown Content:\s*$/m)
+  if (mdStart >= 0) text = text.slice(mdStart).replace(/^Markdown Content:\s*\n?/, '')
+
+  const sections = splitMarkdownSections(text)
+  if (!res.title) {
+    const heading = sections.find((s) => s.level === 1 && s.title)
+    if (heading) res.title = clean(heading.title, 200)
+  }
+
+  if (res.ingredients.length === 0) {
+    const block = sections.find((s) => ING_HEADING.test(s.title))
+    const items = extractListItems(block?.body ?? '')
+    if (items.length) res.ingredients = items.slice(0, MAX_INGREDIENTS).map(parseHungarianIngredient)
+  }
+  if (res.steps.length === 0) {
+    const block = sections.find((s) => STEP_HEADING.test(s.title))
+    const items = extractListItems(block?.body ?? '', { keepParagraphs: true })
+    if (items.length) res.steps = items.slice(0, MAX_STEPS)
+  }
+
+  if (!res.prep_time_minutes) {
+    const m = /(?:elkészítési|teljes|főzési)?\s*idő:?\s*((?:\d+\s*óra)?\s*(?:\d+\s*perc)?)/i.exec(text)
+    const minutes = m ? parseHuDuration(m[1]) : null
+    if (minutes) res.prep_time_minutes = minutes
+  }
+  if (!res.base_servings) {
+    const y = /(\d+)\s*(?:adag|főre|fő|személy|személyre)/i.exec(text)
+    if (y) {
+      const n = Number(y[1])
+      if (n > 0 && n < 1000) res.base_servings = n
+    }
+  }
+}
+
+function splitMarkdownSections(text: string): { level: number; title: string; body: string }[] {
+  const lines = text.split('\n')
+  const sections: { level: number; title: string; body: string }[] = [{ level: 0, title: '', body: '' }]
+  for (const line of lines) {
+    const trimmed = line.trim()
+    const atx = /^(#{1,6})\s+(.+)$/.exec(trimmed)
+    const bold = /^\*\*(.+)\*\*$/.exec(trimmed)
+    if (atx) {
+      sections.push({ level: atx[1].length, title: atx[2].replace(/\*+/g, '').trim(), body: '' })
+      continue
+    }
+    if (bold && trimmed.length < 80) {
+      sections.push({ level: 2, title: bold[1].trim(), body: '' })
+      continue
+    }
+    if (/^(hozzávalók|elkészítés|elkészítése|ingredients|instructions|lépések)\s*:?\s*$/i.test(trimmed)) {
+      sections.push({ level: 2, title: trimmed, body: '' })
+      continue
+    }
+    sections[sections.length - 1].body += `${line}\n`
+  }
+  return sections
+}
+
+function extractListItems(body: string, opts?: { keepParagraphs?: boolean }): string[] {
+  const items: string[] = []
+  let paragraph: string[] = []
+  const flushPara = () => {
+    const t = clean(paragraph.join(' '), 5000)
+    if (t) items.push(t)
+    paragraph = []
+  }
+  for (const rawLine of body.split('\n')) {
+    const line = rawLine.trim()
+    if (!line || SKIP_LINE.test(line) || /^!\[/.test(line) || /^https?:\/\//i.test(line)) {
+      if (opts?.keepParagraphs) flushPara()
+      continue
+    }
+    const listed = /^[-*•]\s+(.+)$/.exec(line) ?? /^\d+[.)]\s+(.+)$/.exec(line)
+    if (listed) {
+      flushPara()
+      const t = clean(listed[1], opts?.keepParagraphs ? 5000 : 300)
+      if (t) items.push(t)
+      continue
+    }
+    if (opts?.keepParagraphs) {
+      paragraph.push(line)
+    } else if (QTY_RE.test(line) || KNOWN_UNITS.has(line.split(/\s+/)[0]?.toLowerCase() ?? '')) {
+      const t = clean(line.replace(/^[-*•]\s+/, ''), 300)
+      if (t) items.push(t)
+    }
+  }
+  flushPara()
+  return items.filter((x, i, arr) => x && arr.indexOf(x) === i)
+}
 
 /** "https://nosalty.hu/recept/chilis-csirke-123" → "Chilis csirke". */
 function titleFromUrl(url: string): string {

@@ -1,14 +1,21 @@
-import { useState } from 'react'
+import { useRef, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import { t } from '../strings'
 import { useRecipes } from '../context/RecipesContext'
 import { usePantry } from '../context/PantryContext'
 import { useShopping } from '../context/ShoppingContext'
-import { daysSince, findInPantry } from '../lib/recipes'
+import { useGlobalError } from '../../../shared/ErrorContext'
+import { daysSince, findInPantry, localDateString } from '../lib/recipes'
 import { formatAmount, formatIngredient, scaleAmount } from '../lib/format'
 import { errorMessage } from '../lib/dbClient'
 import RatingStars from '../components/RatingStars'
 import type { Ingredient, NewShoppingItem, Recipe } from '../types'
+
+function yesterdayOrToday(): string {
+  const d = new Date()
+  d.setDate(d.getDate() - 1)
+  return localDateString(d)
+}
 
 export default function RecipeDetailPage() {
   const { id } = useParams()
@@ -32,6 +39,7 @@ export default function RecipeDetailPage() {
 function RecipeDetail({ recipe }: { recipe: Recipe }) {
   const navigate = useNavigate()
   const { logCooked, remove, update } = useRecipes()
+  const { showError } = useGlobalError()
   const { items: pantry } = usePantry()
   const { addItems } = useShopping()
 
@@ -40,6 +48,8 @@ function RecipeDetail({ recipe }: { recipe: Recipe }) {
   const [added, setAdded] = useState<Set<number>>(new Set())
   const [message, setMessage] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [pickerOpen, setPickerOpen] = useState(false)
+  const dateRef = useRef<HTMLInputElement>(null)
 
   const ingredients = recipe.ingredients
   const days = daysSince(recipe.last_cooked_at)
@@ -73,17 +83,25 @@ function RecipeDetail({ recipe }: { recipe: Recipe }) {
     setAdded(new Set(ingredients.map((_, i) => i)))
   }
 
-  async function onCooked() {
+  async function onCooked(cookedDate?: string) {
     setBusy(true)
     setMessage(null)
     try {
-      await logCooked(recipe)
-      setMessage(t.recipe.cookedLogged)
+      const date = cookedDate && /^\d{4}-\d{2}-\d{2}$/.test(cookedDate) ? cookedDate : localDateString()
+      await logCooked(recipe, date)
+      setMessage(t.recipe.cookedLoggedOn(date))
+      setPickerOpen(false)
     } catch (e) {
+      showError(e, t.errors.save)
       setMessage(errorMessage(e, t.errors.save))
     } finally {
       setBusy(false)
     }
+  }
+
+  function onCookedAt(e: FormEvent) {
+    e.preventDefault()
+    void onCooked(dateRef.current?.value)
   }
 
   async function onRate(value: number) {
@@ -137,9 +155,36 @@ function RecipeDetail({ recipe }: { recipe: Recipe }) {
 
       <div className="card flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <button type="button" className="btn-secondary" disabled={busy} onClick={() => void onCooked()}>
-            {t.actions.logCooking}
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <button type="button" className="btn-secondary" disabled={busy} onClick={() => void onCooked()}>
+              {t.actions.logCooking}
+            </button>
+            <button
+              type="button"
+              className="btn-ghost"
+              disabled={busy}
+              aria-expanded={pickerOpen}
+              onClick={() => setPickerOpen((open) => !open)}
+            >
+              {t.actions.logCookingOn}
+            </button>
+          </div>
+          {pickerOpen && (
+            <form onSubmit={onCookedAt} className="mt-2 flex flex-wrap items-center gap-2">
+              <input
+                ref={dateRef}
+                type="date"
+                className="input w-auto"
+                defaultValue={yesterdayOrToday()}
+                max={localDateString()}
+                aria-label={t.actions.logCookingOn}
+                required
+              />
+              <button type="submit" className="btn-primary" disabled={busy}>
+                {t.form.save}
+              </button>
+            </form>
+          )}
           {message && <p className="mt-2 text-sm text-sage">{message}</p>}
         </div>
         <p className="text-sm text-muted">

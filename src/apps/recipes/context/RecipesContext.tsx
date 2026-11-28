@@ -3,6 +3,7 @@ import { db, isNetworkError, toastMessage } from '../lib/dbClient'
 import { useGlobalError } from '../../../shared/ErrorContext'
 import { t } from '../strings'
 import { readList, STORE_KEYS, writeStore } from '../lib/offlineStore'
+import { localDateString, parseDate } from '../lib/recipes'
 import type { Recipe, RecipeInput, RecipePatch } from '../types'
 
 interface RecipesValue {
@@ -15,7 +16,7 @@ interface RecipesValue {
   create: (input: RecipeInput) => Promise<Recipe>
   update: (id: string, patch: RecipePatch) => Promise<Recipe>
   remove: (id: string) => Promise<void>
-  logCooked: (recipe: Recipe) => Promise<Recipe>
+  logCooked: (recipe: Recipe, cookedDate?: string) => Promise<Recipe>
 }
 
 const RecipesContext = createContext<RecipesValue | null>(null)
@@ -29,7 +30,7 @@ export function RecipesProvider({ children }: { children: ReactNode }) {
   const { showError } = useGlobalError()
   const fail = useCallback(
     (e: unknown, fallback: string = t.errors.save): never => {
-      showError(toastMessage(e, fallback))
+      showError(e, toastMessage(e, fallback))
       throw e
     },
     [showError],
@@ -55,7 +56,7 @@ export function RecipesProvider({ children }: { children: ReactNode }) {
       setStale(false)
     } catch (e) {
       if (isNetworkError(e)) setStale(true)
-      else showError(toastMessage(e, t.errors.load))
+      else showError(e, toastMessage(e, t.errors.load))
     } finally {
       setLoading(false)
     }
@@ -106,8 +107,24 @@ export function RecipesProvider({ children }: { children: ReactNode }) {
   )
 
   const logCooked = useCallback(
-    (recipe: Recipe) => update(recipe.id, { times_cooked: recipe.times_cooked + 1, last_cooked_at: new Date().toISOString() }),
-    [update],
+    async (recipe: Recipe, cookedDate?: string) => {
+      const date = cookedDate && /^\d{4}-\d{2}-\d{2}$/.test(cookedDate) ? cookedDate : localDateString()
+      const [y, m, d] = date.split('-').map(Number)
+      const cookedAt = new Date(y, m - 1, d, 12, 0, 0).toISOString()
+
+      await db
+        .from('cooking_logs')
+        .insert({ recipe_id: recipe.id, cooked_at: cookedAt, cooked_date: date })
+        .throwOnError()
+        .then(undefined, fail)
+
+      const prevMs = parseDate(recipe.last_cooked_at)
+      const prevYmd = prevMs === null ? null : localDateString(new Date(prevMs))
+      const patch: RecipePatch = { times_cooked: recipe.times_cooked + 1 }
+      if (prevYmd === null || date >= prevYmd) patch.last_cooked_at = cookedAt
+      return update(recipe.id, patch)
+    },
+    [update, fail],
   )
 
   const value = useMemo(

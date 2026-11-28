@@ -21,8 +21,8 @@ interface PantryValue {
 
 const PantryContext = createContext<PantryValue | null>(null)
 
-function slim(r: PantryItem): PantryItem {
-  return { ...r, amount: Number(r.amount) }
+function slim(r: PantryItem & { name?: string | null }): PantryItem {
+  return { ...r, item_name: r.item_name || r.name || '', amount: Number(r.amount) }
 }
 
 function sortItems(list: PantryItem[]): PantryItem[] {
@@ -41,7 +41,7 @@ export function PantryProvider({ children }: { children: ReactNode }) {
   const { showError } = useGlobalError()
   const fail = useCallback(
     (e: unknown, fallback: string = t.errors.save): never => {
-      showError(toastMessage(e, fallback))
+      showError(e, toastMessage(e, fallback))
       throw e
     },
     [showError],
@@ -67,7 +67,7 @@ export function PantryProvider({ children }: { children: ReactNode }) {
       setStale(false)
     } catch (e) {
       if (isNetworkError(e)) setStale(true)
-      else showError(toastMessage(e, t.errors.load))
+      else showError(e, toastMessage(e, t.errors.load))
     } finally {
       setLoading(false)
     }
@@ -113,7 +113,13 @@ export function PantryProvider({ children }: { children: ReactNode }) {
         await patch(existing.id, { amount: existing.amount + item.amount, expires_at: dates[0] ?? null })
         return true
       }
-      const { data } = await db.from('pantry_items').insert(item).select().single().throwOnError().then(undefined, fail)
+      const { data } = await db
+        .from('pantry_items')
+        .insert({ ...item, name: item.item_name })
+        .select()
+        .single()
+        .throwOnError()
+        .then(undefined, fail)
       store((prev) => [...prev, slim(data as PantryItem)])
       return false
     },

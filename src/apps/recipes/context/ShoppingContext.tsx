@@ -51,29 +51,40 @@ const tempId = () => `${TMP}${Date.now().toString(36)}${Math.random().toString(3
 
 interface Row {
   id: string
-  item_name: string | null
+  item_name?: string | null
+  name?: string | null
   amount: number | string | null
   unit: string | null
   recipe_name: string | null
-  is_checked: boolean | null
+  is_checked?: boolean | null
+  checked?: boolean | null
 }
 
 function slim(r: Row): ShoppingItem {
   return {
     id: r.id,
-    item_name: r.item_name ?? '',
+    item_name: r.item_name ?? r.name ?? '',
     amount: Number(r.amount ?? 0) || 0,
     unit: r.unit ?? '',
     recipe_name: r.recipe_name ?? '',
-    is_checked: Boolean(r.is_checked),
+    is_checked: Boolean(r.is_checked ?? r.checked),
   }
 }
 
-/** Local model → database columns (0 / "" become NULL). */
+/** Local model → database columns. Dual-writes name/item_name and checked/is_checked. */
 function toColumns(p: ItemPatch | NewShoppingItem): Record<string, unknown> {
   const out: Record<string, unknown> = { ...p }
   if ('amount' in p) out.amount = p.amount && p.amount > 0 ? p.amount : null
   if ('unit' in p) out.unit = p.unit ? p.unit : null
+  if ('item_name' in p && p.item_name !== undefined) {
+    out.item_name = p.item_name
+    out.name = p.item_name
+  }
+  if ('is_checked' in p && p.is_checked !== undefined) {
+    const checked = Boolean(p.is_checked)
+    out.is_checked = checked
+    out.checked = checked
+  }
   return out
 }
 
@@ -107,7 +118,7 @@ async function execute(op: PendingOp): Promise<ShoppingItem | null> {
   switch (op.type) {
     case 'add': {
       const { data } = await table
-        .insert({ ...toColumns(op.item), is_checked: false })
+        .insert({ ...toColumns(op.item), is_checked: false, checked: false })
         .select()
         .single()
         .throwOnError()
@@ -161,7 +172,7 @@ export function ShoppingProvider({ children }: { children: ReactNode }) {
         } catch (e) {
           if (isNetworkError(e)) return // try again when we are back online
           // Permanent failure (e.g. item already deleted elsewhere): drop the op.
-          showError(toastMessage(e, t.errors.save))
+          showError(e, toastMessage(e, t.errors.save))
           commit((s) => ({ ...s, queue: s.queue.filter((o) => o !== op) }))
         }
       }
@@ -176,7 +187,7 @@ export function ShoppingProvider({ children }: { children: ReactNode }) {
       }))
     } catch (e) {
       // offline / transient – retried on the next trigger
-      if (!isNetworkError(e)) showError(toastMessage(e, t.errors.load))
+      if (!isNetworkError(e)) showError(e, toastMessage(e, t.errors.load))
     } finally {
       flushing.current = false
       setSyncing(false)

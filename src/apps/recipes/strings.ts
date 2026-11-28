@@ -37,6 +37,7 @@ export const t = {
   },
   actions: {
     logCooking: '👨‍🍳 Megfőztük ma!',
+    logCookingOn: 'Megfőztük ekkor...',
     addToShopping: '🛒 Listára',
     addAllToShopping: '🛒 Mind a listára',
     servings: (n: string) => `${n} adag`,
@@ -129,6 +130,7 @@ export const t = {
     noResults: 'Nincs találat.',
     back: '← Vissza',
     cookedLogged: 'Rögzítettük, jó étvágyat! 🍽️',
+    cookedLoggedOn: (d: string) => `Főzés rögzítve: ${d}`,
   },
   form: {
     newTitle: 'Új Recept Rögzítése',

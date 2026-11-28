@@ -2,6 +2,14 @@ import type { CostTier, PantryItem, Recipe } from '../types'
 
 const DAY_MS = 86_400_000
 
+/** Local calendar date as YYYY-MM-DD. */
+export function localDateString(d = new Date()): string {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
 /** Lowercase + strip accents so "tojas" matches "tojás". */
 export function normalize(s: string): string {
   return s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim()
