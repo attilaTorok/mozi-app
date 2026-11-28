@@ -5,7 +5,7 @@ import { useRecipes } from '../context/RecipesContext'
 import { usePantry } from '../context/PantryContext'
 import { useShopping } from '../context/ShoppingContext'
 import { useGlobalError } from '../../../shared/ErrorContext'
-import { daysSince, findInPantry, localDateString } from '../lib/recipes'
+import { cookedDateLabel, daysSince, findInPantry, localDateString } from '../lib/recipes'
 import { formatAmount, formatIngredient, scaleAmount } from '../lib/format'
 import { errorMessage } from '../lib/dbClient'
 import RatingStars from '../components/RatingStars'
@@ -32,13 +32,12 @@ export default function RecipeDetailPage() {
       </div>
     )
   }
-  // key → servings state resets when navigating between recipes
   return <RecipeDetail key={recipe.id} recipe={recipe} />
 }
 
 function RecipeDetail({ recipe }: { recipe: Recipe }) {
   const navigate = useNavigate()
-  const { logCooked, remove, update } = useRecipes()
+  const { logCooked, remove, update, setRating, ratings } = useRecipes()
   const { showError } = useGlobalError()
   const { items: pantry } = usePantry()
   const { addItems } = useShopping()
@@ -49,11 +48,14 @@ function RecipeDetail({ recipe }: { recipe: Recipe }) {
   const [message, setMessage] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [pickerOpen, setPickerOpen] = useState(false)
+  const [editingNotes, setEditingNotes] = useState(false)
+  const [notesDraft, setNotesDraft] = useState(recipe.notes ?? '')
   const dateRef = useRef<HTMLInputElement>(null)
 
   const ingredients = recipe.ingredients
   const days = daysSince(recipe.last_cooked_at)
-  const steps = recipe.instructions.split('\n').map((s) => s.trim()).filter(Boolean)
+  const lastDate = cookedDateLabel(recipe.last_cooked_at)
+  const steps = recipe.steps
   const [doneSteps, setDoneSteps] = useState<Set<number>>(new Set())
 
   function toggleStep(i: number) {
@@ -67,8 +69,12 @@ function RecipeDetail({ recipe }: { recipe: Recipe }) {
   function toShoppingItem(i: Ingredient): NewShoppingItem {
     return {
       item_name: i.name,
-      amount: scaleAmount(i.amount, servings, base) ?? 0,
+      quantity: scaleAmount(i.amount, servings, base) ?? 0,
       unit: i.unit,
+      category: null,
+      checked: false,
+      added_by: recipe.added_by,
+      source_recipe_id: recipe.id,
       recipe_name: recipe.title,
     }
   }
@@ -88,7 +94,7 @@ function RecipeDetail({ recipe }: { recipe: Recipe }) {
     setMessage(null)
     try {
       const date = cookedDate && /^\d{4}-\d{2}-\d{2}$/.test(cookedDate) ? cookedDate : localDateString()
-      await logCooked(recipe, date)
+      await logCooked(recipe, date, servings)
       setMessage(t.recipe.cookedLoggedOn(date))
       setPickerOpen(false)
     } catch (e) {
@@ -107,9 +113,23 @@ function RecipeDetail({ recipe }: { recipe: Recipe }) {
   async function onRate(value: number) {
     setMessage(null)
     try {
-      await update(recipe.id, { rating: value > 0 ? value : null })
+      await setRating(recipe.id, value, recipe.added_by)
     } catch (e) {
+      showError(e, t.errors.save)
       setMessage(errorMessage(e, t.errors.save))
+    }
+  }
+
+  async function onSaveNotes(e: FormEvent) {
+    e.preventDefault()
+    setBusy(true)
+    try {
+      await update(recipe.id, { notes: notesDraft.trim() || null })
+      setEditingNotes(false)
+    } catch (e) {
+      showError(e, t.errors.save)
+    } finally {
+      setBusy(false)
     }
   }
 
@@ -119,6 +139,7 @@ function RecipeDetail({ recipe }: { recipe: Recipe }) {
       await remove(recipe.id)
       navigate('/', { replace: true })
     } catch (e) {
+      showError(e, t.errors.save)
       setMessage(errorMessage(e, t.errors.save))
     }
   }
@@ -141,7 +162,7 @@ function RecipeDetail({ recipe }: { recipe: Recipe }) {
             </a>
           )}
         </div>
-        <RatingStars value={recipe.rating ?? 0} onChange={(v) => void onRate(v)} />
+        <RatingStars value={ratings[recipe.id] ?? 0} onChange={(v) => void onRate(v)} />
         {recipe.tags.length > 0 && (
           <div className="flex flex-wrap gap-1.5">
             {recipe.tags.map((tag) => (
@@ -187,12 +208,55 @@ function RecipeDetail({ recipe }: { recipe: Recipe }) {
           )}
           {message && <p className="mt-2 text-sm text-sage">{message}</p>}
         </div>
-        <p className="text-sm text-muted">
-          {recipe.times_cooked > 0 && days !== null
-            ? `${t.recipe.cooked(recipe.times_cooked)} · ${t.recipe.lastCooked(days)}`
-            : t.recipe.neverCooked}
-        </p>
+        <div className="text-sm text-muted">
+          <p className="font-semibold text-ink">{t.recipe.timesCookedLabel(recipe.times_cooked || 0)}</p>
+          <p>
+            {lastDate
+              ? `${t.recipe.lastCookedAt(lastDate)}${days !== null ? ` · ${t.recipe.lastCooked(days)}` : ''}`
+              : t.recipe.neverCooked}
+          </p>
+        </div>
       </div>
+
+      <section className="card space-y-3 p-5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="text-xl font-bold">{t.recipe.notes}</h3>
+          {!editingNotes && (
+            <button
+              type="button"
+              className="btn-ghost"
+              onClick={() => {
+                setNotesDraft(recipe.notes ?? '')
+                setEditingNotes(true)
+              }}
+            >
+              {t.recipe.notesEdit}
+            </button>
+          )}
+        </div>
+        {editingNotes ? (
+          <form onSubmit={(e) => void onSaveNotes(e)} className="space-y-2">
+            <textarea
+              className="input min-h-28"
+              value={notesDraft}
+              onChange={(e) => setNotesDraft(e.target.value)}
+              aria-label={t.recipe.notes}
+            />
+            <div className="flex gap-2">
+              <button type="submit" className="btn-primary" disabled={busy}>
+                {t.form.save}
+              </button>
+              <button type="button" className="btn-ghost" onClick={() => setEditingNotes(false)}>
+                {t.form.cancel}
+              </button>
+            </div>
+          </form>
+        ) : (
+          <p className={`whitespace-pre-wrap text-sm ${recipe.notes ? 'text-ink' : 'text-muted'}`}>
+            {recipe.notes?.trim() || t.recipe.notesEmpty}
+          </p>
+        )}
+      </section>
 
       <div className="grid gap-6 md:grid-cols-5">
         <section className="card p-5 md:col-span-2">
@@ -232,7 +296,7 @@ function RecipeDetail({ recipe }: { recipe: Recipe }) {
                         {formatIngredient(ing, servings, base)}
                         {stock && (
                           <span className="block text-xs font-semibold text-sage">
-                            {t.pantry.inStock(`${formatAmount(stock.amount)} ${stock.unit}`)}
+                            {t.pantry.inStock(`${formatAmount(stock.quantity)} ${stock.unit}`)}
                           </span>
                         )}
                       </span>
@@ -301,4 +365,3 @@ function RecipeDetail({ recipe }: { recipe: Recipe }) {
     </article>
   )
 }
-

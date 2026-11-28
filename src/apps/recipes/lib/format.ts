@@ -19,9 +19,9 @@ export function formatIngredient(i: Ingredient, servings: number, base: number):
 /** Plain-text shopping list (unchecked items only) for SMS / chat sharing. */
 export function shoppingListToText(items: ShoppingItem[], header: string): string {
   const lines = items
-    .filter((i) => !i.is_checked)
+    .filter((i) => !i.checked)
     .map((i) => {
-      const qty = [i.amount > 0 ? formatAmount(i.amount) : '', i.unit].filter(Boolean).join(' ')
+      const qty = [i.quantity > 0 ? formatAmount(i.quantity) : '', i.unit].filter(Boolean).join(' ')
       return `• ${i.item_name}${qty ? ` (${qty})` : ''}`
     })
   return [header, ...lines].join('\n')

@@ -6,6 +6,7 @@ import { expiryInfo, type ExpiryLevel } from '../lib/expiry'
 import { formatAmount, parseNumber } from '../lib/format'
 import { errorMessage } from '../lib/dbClient'
 import { normalize } from '../lib/recipes'
+import { useGlobalError } from '../../../shared/ErrorContext'
 import type { PantryItem } from '../types'
 
 const UNITS = ['db', 'g', 'dkg', 'kg', 'ml', 'l', 'csomag'] as const
@@ -20,6 +21,7 @@ const badgeClass: Record<ExpiryLevel, string> = {
 export default function PantryPage() {
   const { items, loading, add, adjust, update, remove } = usePantry()
   const { addItems } = useShopping()
+  const { showError } = useGlobalError()
 
   const [search, setSearch] = useState('')
   const [name, setName] = useState('')
@@ -39,6 +41,7 @@ export default function PantryPage() {
     try {
       await action()
     } catch (e) {
+      showError(e, t.errors.save)
       setMessage(errorMessage(e, t.errors.save))
     }
   }
@@ -51,9 +54,13 @@ export default function PantryPage() {
     await run(async () => {
       const merged = await add({
         item_name: trimmed,
-        amount: parseNumber(amount) || 1,
+        quantity: parseNumber(amount) || 1,
         unit,
-        expires_at: expires || null,
+        category: null,
+        expiry_date: expires || null,
+        min_threshold: null,
+        added_by: null,
+        notes: null,
       })
       if (merged) setMessage(t.pantry.merged(trimmed))
       setName('')
@@ -65,7 +72,18 @@ export default function PantryPage() {
 
   async function onDepleted(item: PantryItem) {
     // Move to the shopping list (offline-capable) and drop the depleted pantry row.
-    addItems([{ item_name: item.item_name, amount: 0, unit: '', recipe_name: t.shopping.manualItem }])
+    addItems([
+      {
+        item_name: item.item_name,
+        quantity: 0,
+        unit: item.unit || '',
+        category: item.category,
+        checked: false,
+        added_by: item.added_by,
+        source_recipe_id: null,
+        recipe_name: t.shopping.manualItem,
+      },
+    ])
     await run(() => remove(item.id))
   }
 
@@ -134,7 +152,7 @@ export default function PantryPage() {
       ) : (
         <ul className="card divide-y divide-line overflow-hidden">
           {visible.map((item) => {
-            const expiry = expiryInfo(item.expires_at)
+            const expiry = expiryInfo(item.expiry_date)
             return (
               <li key={item.id} className="flex flex-col gap-2 p-4 sm:flex-row sm:items-center">
                 <div className="min-w-0 flex-1">
@@ -148,17 +166,17 @@ export default function PantryPage() {
                         type="date"
                         className="absolute inset-0 cursor-pointer opacity-0"
                         aria-label={t.pantry.expires}
-                        value={item.expires_at ?? ''}
-                        onChange={(e) => void run(() => update(item.id, { expires_at: e.target.value || null }))}
+                        value={item.expiry_date ?? ''}
+                        onChange={(e) => void run(() => update(item.id, { expiry_date: e.target.value || null }))}
                       />
                     </label>
-                    {item.expires_at && (
+                    {item.expiry_date && (
                       <button
                         type="button"
                         className="rounded-full px-1.5 text-xs text-muted hover:bg-subtle"
                         aria-label={t.pantry.clearExpiry}
                         title={t.pantry.clearExpiry}
-                        onClick={() => void run(() => update(item.id, { expires_at: null }))}
+                        onClick={() => void run(() => update(item.id, { expiry_date: null }))}
                       >
                         ✕
                       </button>
@@ -172,16 +190,16 @@ export default function PantryPage() {
                     type="button"
                     className="btn-ghost h-11 w-11 px-0 text-lg"
                     aria-label={t.pantry.decrease}
-                    disabled={item.amount <= 0}
+                    disabled={item.quantity <= 0}
                     onClick={() => void run(() => adjust(item.id, -1))}
                   >
                     －
                   </button>
                   <AmountInput
-                    key={item.amount}
-                    value={item.amount}
+                    key={item.quantity}
+                    value={item.quantity}
                     unit={item.unit}
-                    onSave={(amount) => void run(() => update(item.id, { amount }))}
+                    onSave={(quantity) => void run(() => update(item.id, { quantity }))}
                   />
                   <button
                     type="button"

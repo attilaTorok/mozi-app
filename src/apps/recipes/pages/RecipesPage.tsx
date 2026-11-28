@@ -15,7 +15,7 @@ const sortOptions: { key: SortKey; label: string }[] = [
 ]
 
 export default function RecipesPage() {
-  const { recipes, loading } = useRecipes()
+  const { recipes, ratings, loading } = useRecipes()
   const [query, setQuery] = useState('')
   const [sort, setSort] = useState<SortKey>('name')
   const [tag, setTag] = useState('')
@@ -23,8 +23,8 @@ export default function RecipesPage() {
   const [cost, setCost] = useState<CostTier | ''>('')
 
   const visible = useMemo(
-    () => sortRecipes(filterRecipes(recipes, { query, tag, creator, cost }), sort),
-    [recipes, query, tag, creator, cost, sort],
+    () => sortRecipes(filterRecipes(recipes, { query, tag, creator, cost }), sort, ratings),
+    [recipes, ratings, query, tag, creator, cost, sort],
   )
   const dormant = useMemo(() => findDormant(recipes), [recipes])
   const tags = useMemo(() => uniqueTags(recipes), [recipes])

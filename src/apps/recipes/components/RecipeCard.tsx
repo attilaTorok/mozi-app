@@ -1,11 +1,15 @@
 import { Link } from 'react-router'
 import { t } from '../strings'
-import { daysSince } from '../lib/recipes'
+import { cookedDateLabel, daysSince } from '../lib/recipes'
+import { useRecipes } from '../context/RecipesContext'
 import type { Recipe } from '../types'
 import RatingStars from './RatingStars'
 
 export default function RecipeCard({ recipe, note }: { recipe: Recipe; note?: string }) {
+  const { ratings } = useRecipes()
   const days = daysSince(recipe.last_cooked_at)
+  const lastDate = cookedDateLabel(recipe.last_cooked_at)
+  const rating = ratings[recipe.id] ?? 0
   return (
     <Link
       to={`/receptek/${recipe.id}`}
@@ -18,7 +22,7 @@ export default function RecipeCard({ recipe, note }: { recipe: Recipe; note?: st
         <span>{t.cost[recipe.cost_tier]}</span>
       </div>
 
-      {recipe.rating !== null && recipe.rating > 0 && <RatingStars value={recipe.rating} />}
+      {rating > 0 && <RatingStars value={rating} />}
 
       {recipe.tags.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
@@ -34,8 +38,8 @@ export default function RecipeCard({ recipe, note }: { recipe: Recipe; note?: st
 
       <p className="mt-auto flex flex-wrap items-center justify-between gap-x-3 pt-1 text-xs text-muted">
         <span>
-          {recipe.times_cooked > 0 && days !== null
-            ? `${t.recipe.cooked(recipe.times_cooked)} · ${t.recipe.lastCooked(days)}`
+          {recipe.times_cooked > 0
+            ? `${t.recipe.timesCookedLabel(recipe.times_cooked)}${lastDate ? ` · ${lastDate}` : days !== null ? ` · ${t.recipe.lastCooked(days)}` : ''}`
             : t.recipe.neverCooked}
         </span>
         {recipe.added_by && <span>{t.recipe.addedBy(recipe.added_by)}</span>}

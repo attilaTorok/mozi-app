@@ -50,10 +50,8 @@ function autoGrow(el: HTMLTextAreaElement | null) {
   el.style.height = `${el.scrollHeight + 2}px`
 }
 
-const splitSteps = (s: string | null | undefined) =>
-  (s ?? '').split('\n').map((l) => l.trim()).filter(Boolean)
-
-function fromRecipe(r: Recipe): FormState {
+function fromRecipe(r: Recipe, rating = 0): FormState {
+  const steps = r.steps.length ? r.steps : ['']
   return {
     title: r.title,
     added_by: r.added_by ?? '',
@@ -61,35 +59,46 @@ function fromRecipe(r: Recipe): FormState {
     prep_time_minutes: r.prep_time_minutes ? String(r.prep_time_minutes) : '',
     base_servings: String(r.base_servings || 4),
     cost_tier: r.cost_tier,
-    rating: r.rating ?? 0,
+    rating,
     tags: [...r.tags],
     ingredients: r.ingredients.map((i) => ({
       name: i.name,
       amount: i.amount ? String(i.amount) : '',
       unit: i.unit ?? '',
     })),
-    steps: splitSteps(r.instructions).length ? splitSteps(r.instructions) : [''],
+    steps,
   }
 }
 
-function toInput(f: FormState): RecipeInput {
+function toInput(f: FormState, existing?: Recipe): RecipeInput {
   const tags = [...new Set(f.tags.map((s) => normalize(s)).filter(Boolean))]
+  let source: string | null = existing?.source ?? null
+  try {
+    if (f.source_url.trim()) source = new URL(f.source_url.trim()).hostname
+  } catch {
+    source = existing?.source ?? null
+  }
   return {
     title: f.title.trim(),
-    added_by: f.added_by.trim() || null,
+    description: existing?.description ?? null,
+    image_url: existing?.image_url ?? null,
     source_url: f.source_url.trim() || null,
+    source,
     prep_time_minutes: Math.round(parseNumber(f.prep_time_minutes)) || 30,
+    cook_time_minutes: existing?.cook_time_minutes ?? null,
     base_servings: Math.max(1, Math.round(parseNumber(f.base_servings)) || 4),
+    category: existing?.category ?? null,
+    cuisine: existing?.cuisine ?? null,
+    difficulty: existing?.difficulty ?? null,
     cost_tier: f.cost_tier,
-    rating: f.rating > 0 ? f.rating : null,
     tags,
     ingredients: f.ingredients
       .filter((r) => r.name.trim())
       .map((r) => ({ name: r.name.trim(), amount: parseNumber(r.amount) || null, unit: r.unit.trim() })),
-    instructions: f.steps
-      .map((s) => s.replace(/\s+/g, ' ').trim())
-      .filter(Boolean)
-      .join('\n'),
+    steps: f.steps.map((s) => s.replace(/\s+/g, ' ').trim()).filter(Boolean),
+    notes: existing?.notes ?? null,
+    is_favorite: existing?.is_favorite ?? false,
+    added_by: f.added_by.trim() || null,
   }
 }
 
@@ -113,12 +122,14 @@ export default function RecipeFormPage() {
 
 function RecipeForm({ existing }: { existing?: Recipe }) {
   const navigate = useNavigate()
-  const { recipes, create, update } = useRecipes()
+  const { recipes, create, update, setRating, ratings } = useRecipes()
   const { showError } = useGlobalError()
   const creators = useMemo(() => uniqueCreators(recipes), [recipes])
   const allTags = useMemo(() => uniqueTags(recipes), [recipes])
 
-  const [form, setForm] = useState<FormState>(() => (existing ? fromRecipe(existing) : emptyForm()))
+  const [form, setForm] = useState<FormState>(() =>
+    existing ? fromRecipe(existing, ratings[existing.id] ?? 0) : emptyForm(),
+  )
   const [importUrl, setImportUrl] = useState('')
   const [importing, setImporting] = useState(false)
   const [importNote, setImportNote] = useState<{ ok: boolean; text: string } | null>(null)
@@ -158,7 +169,7 @@ function RecipeForm({ existing }: { existing?: Recipe }) {
       setImportNote({ ok: !data.fallback, text: data.fallback ? t.scrape.fallback : t.scrape.done })
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err)
-      showError(`Recept importálás sikertelen: ${reason}`)
+      showError(err, `Recept importálás sikertelen: ${reason}`)
       setImportNote({ ok: false, text: t.scrape.fallback })
     } finally {
       setImporting(false)
@@ -167,7 +178,7 @@ function RecipeForm({ existing }: { existing?: Recipe }) {
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault()
-    const input = toInput(form)
+    const input = toInput(form, existing)
     if (!input.title) {
       setError(t.errors.requiredTitle)
       return
@@ -176,8 +187,10 @@ function RecipeForm({ existing }: { existing?: Recipe }) {
     setError(null)
     try {
       const saved = existing ? await update(existing.id, input) : await create(input)
+      if (form.rating > 0) await setRating(saved.id, form.rating, input.added_by)
       navigate(`/receptek/${saved.id}`, { replace: true })
     } catch (err) {
+      showError(err, t.errors.save)
       setError(errorMessage(err, t.errors.save))
       setSaving(false)
     }

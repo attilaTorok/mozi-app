@@ -26,6 +26,14 @@ export function daysSince(s: string | null | undefined, now = Date.now()): numbe
   return ms === null ? null : Math.max(0, Math.floor((now - ms) / DAY_MS))
 }
 
+/** Calendar date (YYYY-MM-DD) for `last_cooked_at`. */
+export function cookedDateLabel(s: string | null | undefined): string | null {
+  if (!s) return null
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10)
+  const ms = parseDate(s)
+  return ms === null ? null : localDateString(new Date(ms))
+}
+
 export type SortKey = 'name' | 'dormant' | 'mostCooked' | 'rating' | 'fastest'
 
 export interface RecipeFilter {
@@ -53,7 +61,7 @@ export function filterRecipes(recipes: Recipe[], f: RecipeFilter): Recipe[] {
   })
 }
 
-export function sortRecipes(recipes: Recipe[], key: SortKey): Recipe[] {
+export function sortRecipes(recipes: Recipe[], key: SortKey, ratingAvg: Record<string, number> = {}): Recipe[] {
   const list = [...recipes]
   const byName = (a: Recipe, b: Recipe) => a.title.localeCompare(b.title, 'hu')
   switch (key) {
@@ -70,9 +78,9 @@ export function sortRecipes(recipes: Recipe[], key: SortKey): Recipe[] {
         return da - db
       })
     case 'mostCooked':
-      return list.sort((a, b) => b.times_cooked - a.times_cooked || byName(a, b))
+      return list.sort((a, b) => (b.times_cooked || 0) - (a.times_cooked || 0) || byName(a, b))
     case 'rating':
-      return list.sort((a, b) => (b.rating ?? 0) - (a.rating ?? 0) || byName(a, b))
+      return list.sort((a, b) => (ratingAvg[b.id] ?? 0) - (ratingAvg[a.id] ?? 0) || byName(a, b))
     case 'fastest':
       return list.sort((a, b) => a.prep_time_minutes - b.prep_time_minutes || byName(a, b))
   }
@@ -127,7 +135,7 @@ export function namesMatch(a: string, b: string): boolean {
 }
 
 export function findInPantry(ingredientName: string, pantry: PantryItem[]): PantryItem | undefined {
-  return pantry.find((p) => p.amount > 0 && namesMatch(ingredientName, p.item_name))
+  return pantry.find((p) => p.quantity > 0 && namesMatch(ingredientName, p.item_name))
 }
 
 /** "Raktár-mentő": recipes that use the products with the nearest expiry date. */
@@ -137,8 +145,8 @@ export function pantryRescue(
   count = 3,
 ): { recipe: Recipe; uses: string[] }[] {
   const expiring = pantry
-    .filter((p) => p.amount > 0 && p.expires_at)
-    .sort((a, b) => (a.expires_at as string).localeCompare(b.expires_at as string))
+    .filter((p) => p.quantity > 0 && p.expiry_date)
+    .sort((a, b) => (a.expiry_date as string).localeCompare(b.expiry_date as string))
     .slice(0, 5)
   if (expiring.length === 0) return []
 

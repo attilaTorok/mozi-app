@@ -11,14 +11,25 @@ export default function ShoppingPage() {
   const [text, setText] = useState('')
   const [copied, setCopied] = useState(false)
 
-  const open = items.filter((i) => !i.is_checked)
-  const done = items.filter((i) => i.is_checked)
+  const open = items.filter((i) => !i.checked)
+  const done = items.filter((i) => i.checked)
 
   function onAdd(e: FormEvent) {
     e.preventDefault()
     const name = text.trim()
     if (!name) return
-    addItems([{ item_name: name, amount: 0, unit: '', recipe_name: t.shopping.manualItem }])
+    addItems([
+      {
+        item_name: name,
+        quantity: 0,
+        unit: '',
+        category: null,
+        checked: false,
+        added_by: null,
+        source_recipe_id: null,
+        recipe_name: t.shopping.manualItem,
+      },
+    ])
     setText('')
   }
 
@@ -88,18 +99,18 @@ function Row({
 }: {
   item: ShoppingItem
   onToggle: (id: string) => void
-  onEdit: (id: string, patch: { item_name: string; amount: number; unit: string }) => void
+  onEdit: (id: string, patch: { item_name: string; quantity: number; unit: string }) => void
   onRemove: (id: string) => void
 }) {
   const [editing, setEditing] = useState(false)
   const [name, setName] = useState('')
   const [amount, setAmount] = useState('')
   const [unit, setUnit] = useState('')
-  const qty = [item.amount > 0 ? formatAmount(item.amount) : '', item.unit].filter(Boolean).join(' ')
+  const qty = [item.quantity > 0 ? formatAmount(item.quantity) : '', item.unit].filter(Boolean).join(' ')
 
   function startEdit() {
     setName(item.item_name)
-    setAmount(item.amount > 0 ? formatAmount(item.amount) : '')
+    setAmount(item.quantity > 0 ? formatAmount(item.quantity) : '')
     setUnit(item.unit)
     setEditing(true)
   }
@@ -108,7 +119,7 @@ function Row({
     e.preventDefault()
     const trimmed = name.trim()
     if (!trimmed) return
-    onEdit(item.id, { item_name: trimmed, amount: parseNumber(amount) || 0, unit: unit.trim() })
+    onEdit(item.id, { item_name: trimmed, quantity: parseNumber(amount) || 0, unit: unit.trim() })
     setEditing(false)
   }
 
@@ -159,10 +170,10 @@ function Row({
         <input
           type="checkbox"
           className="h-6 w-6 shrink-0 accent-[var(--color-sage)]"
-          checked={item.is_checked}
+          checked={item.checked}
           onChange={() => onToggle(item.id)}
         />
-        <span className={item.is_checked ? 'text-muted line-through' : ''}>
+        <span className={item.checked ? 'text-muted line-through' : ''}>
           <span className="font-semibold">{item.item_name}</span>
           {qty && <span className="text-muted"> · {qty}</span>}
           {item.recipe_name && <span className="block text-xs text-muted">{item.recipe_name}</span>}

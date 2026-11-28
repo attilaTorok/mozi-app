@@ -131,6 +131,11 @@ export const t = {
     back: '← Vissza',
     cookedLogged: 'Rögzítettük, jó étvágyat! 🍽️',
     cookedLoggedOn: (d: string) => `Főzés rögzítve: ${d}`,
+    timesCookedLabel: (n: number) => `Főzve: ${n}×`,
+    lastCookedAt: (d: string) => `Utoljára főzve: ${d}`,
+    notes: 'Saját megjegyzések / Tippek',
+    notesEmpty: 'Még nincs megjegyzés ehhez a recepthez...',
+    notesEdit: 'Szerkesztés / Megjegyzés hozzáadása',
   },
   form: {
     newTitle: 'Új Recept Rögzítése',

@@ -17,7 +17,7 @@ import type { NewShoppingItem, ShoppingItem } from '../types'
  *   are re-applied on top of it.
  */
 
-type ItemPatch = Partial<Pick<ShoppingItem, 'is_checked' | 'amount' | 'unit' | 'item_name'>>
+type ItemPatch = Partial<Pick<ShoppingItem, 'checked' | 'quantity' | 'unit' | 'item_name' | 'category' | 'checked_by'>>
 
 type PendingOp =
   | { type: 'add'; tempId: string; item: NewShoppingItem }
@@ -46,52 +46,57 @@ const TMP = 'tmp_'
 const ShoppingContext = createContext<ShoppingValue | null>(null)
 const EMPTY: Persisted = { items: [], queue: [], syncedAt: null }
 
-// crypto.randomUUID is unavailable on plain-http LAN origins, so don't rely on it.
 const tempId = () => `${TMP}${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`
 
-interface Row {
-  id: string
-  item_name?: string | null
-  name?: string | null
-  amount: number | string | null
-  unit: string | null
-  recipe_name: string | null
-  is_checked?: boolean | null
-  checked?: boolean | null
-}
-
-function slim(r: Row): ShoppingItem {
+function slim(r: ShoppingItem): ShoppingItem {
   return {
     id: r.id,
-    item_name: r.item_name ?? r.name ?? '',
-    amount: Number(r.amount ?? 0) || 0,
+    created_at: r.created_at ?? null,
+    item_name: r.item_name ?? '',
+    quantity: Number(r.quantity ?? 0) || 0,
     unit: r.unit ?? '',
-    recipe_name: r.recipe_name ?? '',
-    is_checked: Boolean(r.is_checked ?? r.checked),
+    category: r.category ?? null,
+    checked: Boolean(r.checked),
+    checked_by: r.checked_by ?? null,
+    added_by: r.added_by ?? null,
+    source_recipe_id: r.source_recipe_id ?? null,
+    recipe_name: r.recipe_name ?? null,
   }
 }
 
-/** Local model → database columns. Dual-writes name/item_name and checked/is_checked. */
 function toColumns(p: ItemPatch | NewShoppingItem): Record<string, unknown> {
-  const out: Record<string, unknown> = { ...p }
-  if ('amount' in p) out.amount = p.amount && p.amount > 0 ? p.amount : null
-  if ('unit' in p) out.unit = p.unit ? p.unit : null
-  if ('item_name' in p && p.item_name !== undefined) {
-    out.item_name = p.item_name
-    out.name = p.item_name
-  }
-  if ('is_checked' in p && p.is_checked !== undefined) {
-    const checked = Boolean(p.is_checked)
-    out.is_checked = checked
-    out.checked = checked
-  }
+  const out: Record<string, unknown> = {}
+  if ('item_name' in p && p.item_name !== undefined) out.item_name = p.item_name
+  if ('quantity' in p && p.quantity !== undefined) out.quantity = p.quantity && p.quantity > 0 ? p.quantity : null
+  if ('unit' in p && p.unit !== undefined) out.unit = p.unit ? p.unit : null
+  if ('category' in p && p.category !== undefined) out.category = p.category
+  if ('checked' in p && p.checked !== undefined) out.checked = Boolean(p.checked)
+  if ('added_by' in p && p.added_by !== undefined) out.added_by = p.added_by
+  if ('source_recipe_id' in p && p.source_recipe_id !== undefined) out.source_recipe_id = p.source_recipe_id
+  if ('recipe_name' in p && p.recipe_name !== undefined) out.recipe_name = p.recipe_name
+  if ('checked_by' in p && p.checked_by !== undefined) out.checked_by = p.checked_by
   return out
 }
 
 function applyOp(items: ShoppingItem[], op: PendingOp): ShoppingItem[] {
   switch (op.type) {
     case 'add':
-      return [...items, { id: op.tempId, ...op.item, is_checked: false }]
+      return [
+        ...items,
+        {
+          id: op.tempId,
+          created_at: null,
+          item_name: op.item.item_name,
+          quantity: op.item.quantity,
+          unit: op.item.unit,
+          category: op.item.category,
+          checked: false,
+          checked_by: null,
+          added_by: op.item.added_by,
+          source_recipe_id: op.item.source_recipe_id,
+          recipe_name: op.item.recipe_name,
+        },
+      ]
     case 'update':
       return items.map((i) => (i.id === op.id ? { ...i, ...op.patch } : i))
     case 'delete':
@@ -103,7 +108,6 @@ function enqueue(s: Persisted, op: PendingOp): Persisted {
   return { ...s, items: applyOp(s.items, op), queue: [...s.queue, op] }
 }
 
-/** Removing a never-synced item just cancels its pending operations. */
 function removeItem(s: Persisted, id: string): Persisted {
   if (!id.startsWith(TMP)) return enqueue(s, { type: 'delete', id })
   return {
@@ -118,11 +122,20 @@ async function execute(op: PendingOp): Promise<ShoppingItem | null> {
   switch (op.type) {
     case 'add': {
       const { data } = await table
-        .insert({ ...toColumns(op.item), is_checked: false, checked: false })
+        .insert({
+          item_name: op.item.item_name,
+          quantity: op.item.quantity && op.item.quantity > 0 ? op.item.quantity : null,
+          unit: op.item.unit || null,
+          category: op.item.category,
+          checked: false,
+          added_by: op.item.added_by,
+          source_recipe_id: op.item.source_recipe_id,
+          recipe_name: op.item.recipe_name,
+        })
         .select()
         .single()
         .throwOnError()
-      return slim(data as Row)
+      return slim(data as ShoppingItem)
     }
     case 'update':
       await table.update(toColumns(op.patch)).eq('id', op.id).throwOnError()
@@ -137,7 +150,10 @@ export function ShoppingProvider({ children }: { children: ReactNode }) {
   const { showError } = useGlobalError()
   const online = useOnline()
 
-  const [state, setState] = useState<Persisted>(() => readStore(STORE_KEYS.shopping, EMPTY))
+  const [state, setState] = useState<Persisted>(() => {
+    const stored = readStore(STORE_KEYS.shopping, EMPTY)
+    return { ...stored, items: stored.items.map(slim) }
+  })
   const [syncing, setSyncing] = useState(false)
   const stateRef = useRef(state)
   const flushing = useRef(false)
@@ -154,7 +170,6 @@ export function ShoppingProvider({ children }: { children: ReactNode }) {
     flushing.current = true
     setSyncing(true)
     try {
-      // 1) flush pending operations in order
       while (stateRef.current.queue.length > 0) {
         const op = stateRef.current.queue[0]
         const refersToLocalOnlyItem = op.type !== 'add' && op.id.startsWith(TMP)
@@ -170,23 +185,20 @@ export function ShoppingProvider({ children }: { children: ReactNode }) {
             return { ...s, items, queue }
           })
         } catch (e) {
-          if (isNetworkError(e)) return // try again when we are back online
-          // Permanent failure (e.g. item already deleted elsewhere): drop the op.
+          if (isNetworkError(e)) return
           showError(e, toastMessage(e, t.errors.save))
           commit((s) => ({ ...s, queue: s.queue.filter((o) => o !== op) }))
         }
       }
 
-      // 2) pull the server state and re-apply anything still pending
       const { data } = await db.from('shopping_list').select('*').order('created_at', { ascending: true }).throwOnError()
-      const remote = ((data ?? []) as Row[]).map(slim)
+      const remote = ((data ?? []) as ShoppingItem[]).map(slim)
       commit((s) => ({
         items: s.queue.reduce(applyOp, remote),
         queue: s.queue,
         syncedAt: Date.now(),
       }))
     } catch (e) {
-      // offline / transient – retried on the next trigger
       if (!isNetworkError(e)) showError(e, toastMessage(e, t.errors.load))
     } finally {
       flushing.current = false
@@ -194,7 +206,6 @@ export function ShoppingProvider({ children }: { children: ReactNode }) {
     }
   }, [commit, showError])
 
-  // Triggers: coming online, new pending changes, tab focus, periodic retry.
   useEffect(() => {
     if (online) void sync()
   }, [online, sync])
@@ -204,7 +215,6 @@ export function ShoppingProvider({ children }: { children: ReactNode }) {
     if (online && pendingCount > 0) void sync()
   }, [pendingCount, online, sync])
 
-  // Changes made while a sync was running (or a failed attempt): retry shortly after it ends.
   useEffect(() => {
     if (!online || pendingCount === 0 || syncing) return
     const id = window.setTimeout(() => void sync(), 5_000)
@@ -223,7 +233,6 @@ export function ShoppingProvider({ children }: { children: ReactNode }) {
     }
   }, [sync])
 
-  // ------------------------------------------------------------------ actions
   const addItems = useCallback(
     (incoming: NewShoppingItem[]) => {
       commit((s) => {
@@ -232,14 +241,12 @@ export function ShoppingProvider({ children }: { children: ReactNode }) {
           const name = normalize(item.item_name)
           const unit = item.unit.trim().toLowerCase()
           const existing = cur.items.find(
-            (i) => !i.is_checked && normalize(i.item_name) === name && i.unit.trim().toLowerCase() === unit,
+            (i) => !i.checked && normalize(i.item_name) === name && i.unit.trim().toLowerCase() === unit,
           )
-          if (existing && existing.amount > 0 && item.amount > 0) {
-            // same ingredient from another recipe: sum the amounts
-            cur = enqueue(cur, { type: 'update', id: existing.id, patch: { amount: existing.amount + item.amount } })
-          } else if (!(existing && existing.amount === 0 && item.amount === 0)) {
-            // (an identical amount-less item already on the list is skipped)
-            cur = enqueue(cur, { type: 'add', tempId: tempId(), item })
+          if (existing && existing.quantity > 0 && item.quantity > 0) {
+            cur = enqueue(cur, { type: 'update', id: existing.id, patch: { quantity: existing.quantity + item.quantity } })
+          } else if (!(existing && existing.quantity === 0 && item.quantity === 0)) {
+            cur = enqueue(cur, { type: 'add', tempId: tempId(), item: { ...item, checked: false } })
           }
         }
         return cur
@@ -253,7 +260,7 @@ export function ShoppingProvider({ children }: { children: ReactNode }) {
       commit((s) => {
         const item = s.items.find((i) => i.id === id)
         if (!item) return s
-        return enqueue(s, { type: 'update', id, patch: { is_checked: !item.is_checked } })
+        return enqueue(s, { type: 'update', id, patch: { checked: !item.checked } })
       })
     },
     [commit],
@@ -267,13 +274,13 @@ export function ShoppingProvider({ children }: { children: ReactNode }) {
   const remove = useCallback((id: string) => commit((s) => removeItem(s, id)), [commit])
 
   const clearChecked = useCallback(() => {
-    commit((s) => s.items.filter((i) => i.is_checked).reduce((acc, i) => removeItem(acc, i.id), s))
+    commit((s) => s.items.filter((i) => i.checked).reduce((acc, i) => removeItem(acc, i.id), s))
   }, [commit])
 
   const value = useMemo<ShoppingValue>(
     () => ({
       items: state.items,
-      uncheckedCount: state.items.filter((i) => !i.is_checked).length,
+      uncheckedCount: state.items.filter((i) => !i.checked).length,
       pendingCount,
       syncing,
       addItems,
@@ -292,4 +299,3 @@ export function useShopping(): ShoppingValue {
   if (!ctx) throw new Error('useShopping must be used inside ShoppingProvider')
   return ctx
 }
-
